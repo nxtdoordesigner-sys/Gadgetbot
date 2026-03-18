@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from bot import handle_message, add_to_cart, view_cart, get_admin_ids
+from bot import handle_message, add_to_cart, view_cart, get_admin_ids, sessions
 from catalog import get_all_books, search_books, format_catalog, get_book_by_id
 from supabase_client import supabase
 
@@ -65,7 +65,7 @@ async def catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_catalog(message, products):
-    for product in products[:10]:  # Cap at 10 to avoid spam
+    for product in products[:10]:
         keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
         caption = (
             f"*{product['title']}*\n"
@@ -99,7 +99,6 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         await update.message.reply_text("Usage: /search <product name>")
         return
-    from catalog import search_books
     products = search_books(query)
     if not products:
         await update.message.reply_text(f"😔 No results for *{query}*.", parse_mode="Markdown")
@@ -152,7 +151,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     is_admin = user_id in get_admin_ids()
 
-    # ── Customer callbacks
     if data == "browse_catalog":
         products = get_all_books()
         await query.message.reply_text("📱 Here's our catalog:")
@@ -185,7 +183,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
-    # ── Admin callbacks
     elif data == "admin_orders" and is_admin:
         res = supabase.table("orders").select("*").eq("status", "pending").order("created_at", desc=True).execute()
         pending = res.data or []
@@ -223,10 +220,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 if image_url:
                     await query.message.reply_photo(
-                        photo=image_url,
-                        caption=caption,
-                        parse_mode="Markdown",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
+                        photo=image_url, caption=caption,
+                        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 else:
                     await query.message.reply_text(caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -294,21 +289,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["photo_product_id"] = product_id
         context.user_data["pending_addphoto_id"] = product_id
         await query.message.reply_text(
-            f"🖼 Send a photo for product ID `{product_id}`.\n"
-            "Just send the image directly in this chat.",
+            f"🖼 Send a photo for product ID `{product_id}`.\nJust send the image directly in this chat.",
             parse_mode="Markdown"
         )
 
 
-# ── Photo handler (for adding product images) ─────────────
+# ── Photo handler ─────────────────────────────────────────
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in get_admin_ids():
         return
 
-    # Determine which product to attach the photo to (priority order)
     product_id = None
-
     if context.user_data.get("admin_action") == "add_photo":
         product_id = context.user_data.get("photo_product_id")
     elif context.user_data.get("pending_addphoto_id"):
@@ -326,17 +318,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Uploading photo to Supabase...")
 
     try:
-        # Step 1: Get highest resolution photo from Telegram
         photo = update.message.photo[-1]
         tg_file = await context.bot.get_file(photo.file_id)
 
-        # Step 2: Download image bytes from Telegram
         import httpx
         async with httpx.AsyncClient() as client:
             response = await client.get(tg_file.file_path)
             image_bytes = response.content
 
-        # Step 3: Upload to Supabase Storage bucket "product-images"
         file_name = f"products/{product_id}_{photo.file_unique_id}.jpg"
         supabase.storage.from_("product-images").upload(
             path=file_name,
@@ -344,21 +333,16 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_options={"content-type": "image/jpeg", "upsert": "true"}
         )
 
-        # Step 4: Get the public URL
         public_url = supabase.storage.from_("product-images").get_public_url(file_name)
-
-        # Step 5: Save the public URL to the books table
         supabase.table("books").update({"image_url": public_url}).eq("id", product_id).execute()
 
-        # Clean up all context flags
         context.user_data.pop("admin_action", None)
         context.user_data.pop("photo_product_id", None)
         context.user_data.pop("last_added_product_id", None)
         context.user_data.pop("pending_addphoto_id", None)
 
         await update.message.reply_text(
-            f"✅ Photo uploaded for product ID `{product_id}`!\n\n"
-            f"🔗 `{public_url}`",
+            f"✅ Photo uploaded for product ID `{product_id}`!\n\n🔗 `{public_url}`",
             parse_mode="Markdown"
         )
         logger.info(f"Photo uploaded for product {product_id}: {public_url}")
@@ -373,30 +357,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # Handle pending photo attachment (admin typed product name after sending photo)
     if user_id in get_admin_ids() and context.user_data.get("pending_photo"):
-        from catalog import search_books
         results = search_books(user_message)
         if results:
             product = results[0]
             file_id = context.user_data.pop("pending_photo")
             supabase.table("books").update({"image_url": file_id}).eq("id", product["id"]).execute()
             await update.message.reply_text(
-                f"✅ Photo attached to *{product['title']}*!",
-                parse_mode="Markdown"
+                f"✅ Photo attached to *{product['title']}*!", parse_mode="Markdown"
             )
             return
         else:
             await update.message.reply_text(
-                f"❓ Couldn't find '{user_message}'. Try a different name.",
-                parse_mode="Markdown"
+                f"❓ Couldn't find '{user_message}'. Try a different name.", parse_mode="Markdown"
             )
             return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
 
-    # ── Extract ##LASTADDED## — store product ID for next photo upload
+    # ── Extract ##LASTADDED##
     if "##LASTADDED##" in reply:
         try:
             last_added_id = int(reply.split("##LASTADDED##")[1].strip())
@@ -405,8 +385,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # ── Extract ##ADDPHOTO## — admin said "add photo for X" in chat
-    # bot.py resolves the name/ID to a real product ID before returning this signal
+    # ── Extract ##ADDPHOTO##
     if "##ADDPHOTO##" in reply:
         try:
             photo_product_id = int(reply.split("##ADDPHOTO##")[1].strip())
@@ -417,37 +396,57 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # Send reply text
     await update.message.reply_text(reply, parse_mode="Markdown")
 
-    # Proactively send product photos if bot mentioned specific products (customers only)
+    # Proactively send product photos — customers only, once per product per session
     if user_id not in get_admin_ids():
-        await send_relevant_photos(update.message, reply, bot=context.bot)
+        await send_relevant_photos(update.message, reply, str(user_id))
 
 
-# ── Send product photos based on bot reply ───────────────
-async def send_relevant_photos(message, reply_text: str, bot=None):
-    """Scan bot reply for product names and send their photos if available."""
+# ── Send product photos — once per product per session ────
+async def send_relevant_photos(message, reply_text: str, user_id: str):
+    """Send product photos inline, but only once per product per session."""
     try:
+        # Get or init the photos_sent set for this user's session
+        user_session = sessions.get(user_id, {})
+        photos_sent = user_session.get("photos_sent", set())
+
+        # Check if customer explicitly asked for a photo — if so, allow resend
+        last_msg = ""
+        history = user_session.get("history", [])
+        if history:
+            last_msg = history[-2]["content"].lower() if len(history) >= 2 else ""
+        explicit_request = any(w in last_msg for w in [
+            "picture", "photo", "image", "pic", "show me", "send me", "see it", "how does it look"
+        ])
+
         products = get_all_books()
-        sent = set()
+        sent_this_turn = set()
+
         for product in products:
-            title_lower = product["title"].lower()
-            reply_lower = reply_text.lower()
             image_url = product.get("image_url")
             if not image_url:
                 continue
+
+            product_id = product["id"]
+
+            # Skip if already sent this session, unless customer explicitly asked
+            if product_id in photos_sent and not explicit_request:
+                continue
+
+            # Check if this product is mentioned in the reply
+            title_lower = product["title"].lower()
+            reply_lower = reply_text.lower()
             title_words = [w for w in title_lower.split() if len(w) > 3]
             if not any(w in reply_lower for w in title_words):
                 continue
-            if product["id"] in sent:
+
+            if product_id in sent_this_turn:
                 continue
 
-            keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
-            title = product["title"]
-            price = product["price"]
+            keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product_id}")]]
             neg = " | 💬 Negotiable" if product.get("negotiable") else ""
-            caption = f"*{title}*\n💰 ₦{price:,}{neg}"
+            caption = f"*{product['title']}*\n💰 ₦{product['price']:,}{neg}"
 
             try:
                 await message.reply_photo(
@@ -456,13 +455,19 @@ async def send_relevant_photos(message, reply_text: str, bot=None):
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
-                sent.add(product["id"])
-                logger.info(f"Photo sent for product {product['id']}: {image_url[:50]}")
+                sent_this_turn.add(product_id)
+                photos_sent.add(product_id)
+                logger.info(f"Photo sent for product {product_id}")
             except Exception as e:
-                logger.error(f"Failed to send photo for product {product['id']}: {e}")
+                logger.error(f"Failed to send photo for product {product_id}: {e}")
 
-            if len(sent) >= 3:
+            if len(sent_this_turn) >= 3:
                 break
+
+        # Persist updated photos_sent back to session
+        if user_id in sessions:
+            sessions[user_id]["photos_sent"] = photos_sent
+
     except Exception as e:
         logger.error(f"send_relevant_photos error: {e}")
 
