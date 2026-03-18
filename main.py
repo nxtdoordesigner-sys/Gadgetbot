@@ -128,7 +128,7 @@ async def orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── /admin ────────────────────────────────────────────────
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         await update.message.reply_text("⛔ Access denied.")
         return
     keyboard = [
@@ -304,15 +304,67 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in get_admin_ids():
         return
+
+    # Determine which product to attach the photo to
+    product_id = None
+
+    # Priority 1: admin clicked "Add Photo" button from inventory
     if context.user_data.get("admin_action") == "add_photo":
         product_id = context.user_data.get("photo_product_id")
-        photo = update.message.photo[-1]  # Highest resolution
-        image_url = photo.file_id  # Store Telegram file_id
 
-        supabase.table("books").update({"image_url": image_url}).eq("id", product_id).execute()
+    # Priority 2: admin just added a product via chat (##LASTADDED## flow)
+    elif context.user_data.get("last_added_product_id"):
+        product_id = context.user_data.get("last_added_product_id")
+
+    if not product_id:
+        await update.message.reply_text(
+            "❓ Not sure which product this photo is for.\n"
+            "Use the 🖼 Add Photo button from inventory, or add a product first."
+        )
+        return
+
+    await update.message.reply_text("⏳ Uploading photo to Supabase...")
+
+    try:
+        # Step 1: Get highest resolution photo from Telegram
+        photo = update.message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+
+        # Step 2: Download image bytes from Telegram
+        import httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.get(tg_file.file_path)
+            image_bytes = response.content
+
+        # Step 3: Upload to Supabase Storage bucket "product-images"
+        file_name = f"products/{product_id}_{photo.file_unique_id}.jpg"
+        supabase.storage.from_("product-images").upload(
+            path=file_name,
+            file=image_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"}
+        )
+
+        # Step 4: Get the public URL
+        public_url = supabase.storage.from_("product-images").get_public_url(file_name)
+
+        # Step 5: Save the public URL to the books table
+        supabase.table("books").update({"image_url": public_url}).eq("id", product_id).execute()
+
+        # Clean up context flags
         context.user_data.pop("admin_action", None)
         context.user_data.pop("photo_product_id", None)
-        await update.message.reply_text(f"✅ Photo added to product ID `{product_id}`!", parse_mode="Markdown")
+        context.user_data.pop("last_added_product_id", None)
+
+        await update.message.reply_text(
+            f"✅ Photo uploaded for product ID `{product_id}`!\n\n"
+            f"🔗 `{public_url}`",
+            parse_mode="Markdown"
+        )
+        logger.info(f"Photo uploaded for product {product_id}: {public_url}")
+
+    except Exception as e:
+        logger.error(f"Photo upload failed for product {product_id}: {e}")
+        await update.message.reply_text(f"❌ Upload failed: {e}")
 
 
 # ── Natural language messages ─────────────────────────────
@@ -320,7 +372,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # Handle pending photo attachment
+    # Handle pending photo attachment (admin typed product name after sending photo)
     if user_id in get_admin_ids() and context.user_data.get("pending_photo"):
         from catalog import search_books
         results = search_books(user_message)
@@ -343,7 +395,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
 
-    # Extract ##LASTADDED## marker if present
+    # Extract ##LASTADDED## marker if present — store product ID for next photo upload
     last_added_id = None
     if "##LASTADDED##" in reply:
         try:
@@ -356,7 +408,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send reply text
     await update.message.reply_text(reply, parse_mode="Markdown")
 
-    # Proactively send product photos if bot mentioned specific products
+    # Proactively send product photos if bot mentioned specific products (customers only)
     if user_id not in get_admin_ids():
         await send_relevant_photos(update.message, reply, bot=context.bot)
 
@@ -386,7 +438,6 @@ async def send_relevant_photos(message, reply_text: str, bot=None):
             neg = " | 💬 Negotiable" if product.get("negotiable") else ""
             caption = f"*{title}*\n💰 ₦{price:,}{neg}"
 
-            # Try sending as file_id first, then as URL
             try:
                 await message.reply_photo(
                     photo=image_url,
@@ -395,10 +446,9 @@ async def send_relevant_photos(message, reply_text: str, bot=None):
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 sent.add(product["id"])
-                logger.info(f"Photo sent for product {product['id']}: {image_url[:30]}")
+                logger.info(f"Photo sent for product {product['id']}: {image_url[:50]}")
             except Exception as e:
                 logger.error(f"Failed to send photo for product {product['id']}: {e}")
-                # Photo failed — skip silently, don't break conversation
 
             if len(sent) >= 3:
                 break
