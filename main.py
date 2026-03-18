@@ -326,10 +326,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results = search_books(user_message)
         if results:
             product = results[0]
-            image_url = context.user_data.pop("pending_photo")
-            supabase.table("books").update({"image_url": image_url}).eq("id", product["id"]).execute()
+            file_id = context.user_data.pop("pending_photo")
+            supabase.table("books").update({"image_url": file_id}).eq("id", product["id"]).execute()
             await update.message.reply_text(
                 f"✅ Photo attached to *{product['title']}*!",
+                parse_mode="Markdown"
+            )
+            return
+        else:
+            await update.message.reply_text(
+                f"❓ Couldn't find '{user_message}'. Try a different name.",
                 parse_mode="Markdown"
             )
             return
