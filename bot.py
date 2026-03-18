@@ -411,6 +411,8 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             parts = [p.strip() for p in update_data.split("|")]
             product_id, field, value = int(parts[0]), parts[1], parts[2]
             # Never allow image updates via text signal — only via photo handler
+            if field in ["image_url", "image", "photo", "specs"] and "image" in str(value).lower():
+                return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nSend the photo directly in chat and I'll attach it! 📸"
             if field in ["image_url", "image", "photo"]:
                 return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nSend the photo directly in chat and I'll attach it! 📸"
             if field in ["price", "base_price", "list_price"]:
