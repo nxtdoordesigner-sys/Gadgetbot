@@ -71,6 +71,9 @@ PAYMENT (after order placed):
 - For card payment: type "pay with card"
 
 Only reference products from the catalog. Never make up products or prices.
+
+PHOTOS: When you mention or recommend a product, photos are automatically sent if available.
+If customer asks "can I see a picture?" or "send me a photo" — tell them the photo is being sent and mention the product name clearly so it triggers automatically.
 """
 
 
@@ -363,8 +366,11 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 "condition": condition, "stock_qty": stock_qty,
                 "negotiable": negotiable, "in_stock": True, "specs": specs
             }).execute()
-            suffix = f"\n\n✅ *{name}* added! ID: `{res.data[0]['id']}`" if res.data else "\n\n❌ Failed."
-            return clean_reply(reply, ["ADDPRODUCT"]) + suffix
+            if res.data:
+                new_id = res.data[0]['id']
+                suffix = f"\n\n✅ *{name}* added!\n\nNow send me the product photos and I'll attach them automatically 📸"
+                return clean_reply(reply, ["ADDPRODUCT"]) + suffix + f"##LASTADDED##{new_id}"
+            return clean_reply(reply, ["ADDPRODUCT"]) + "\n\n❌ Failed to add."
         except Exception as e:
             return clean_reply(reply, ["ADDPRODUCT"]) + f"\n\n❌ Error: {e}"
 
