@@ -2,7 +2,7 @@ from supabase_client import supabase
 
 
 def get_all_books():
-    response = supabase.table("books").select("*").eq("in_stock", True).execute()
+    response = supabase.table("books").select("*").eq("in_stock", True).order("id").execute()
     return response.data or []
 
 
@@ -21,7 +21,7 @@ def search_books(query: str):
     response = (
         supabase.table("books")
         .select("*")
-        .or_(f"title.ilike.%{query}%,author.ilike.%{query}%")
+        .or_(f"title.ilike.%{query}%,author.ilike.%{query}%,category.ilike.%{query}%")
         .eq("in_stock", True)
         .execute()
     )
@@ -33,18 +33,29 @@ def get_book_by_id(book_id: int):
     return response.data
 
 
-def format_book(book: dict) -> str:
-    return (
-        f"📱 *{book['title']}*\n"
-        f"🏷️ {book['author']}\n"
-        f"📂 {book.get('category', 'General')}\n"
-        f"💰 ₦{book['price']:,}\n"
-        f"{'✅ In Stock' if book['in_stock'] else '❌ Out of Stock'}\n"
-        f"🆔 ID: `{book['id']}`"
-    )
+def format_book(product: dict) -> str:
+    negotiable = "💬 Price negotiable" if product.get("negotiable") else ""
+    condition = product.get("condition", "Brand New")
+    stock = product.get("stock_qty", 1)
+    specs = product.get("specs", "")
+
+    lines = [
+        f"📱 *{product['title']}*",
+        f"🏷️ {product['author']}",
+        f"📂 {product.get('category', 'General')}",
+        f"🔧 {condition}",
+        f"💰 ₦{product['price']:,}",
+        f"📦 {stock} unit(s) available" if stock > 0 else "❌ Out of Stock",
+    ]
+    if negotiable:
+        lines.append(negotiable)
+    if specs:
+        lines.append(f"📋 {specs}")
+    lines.append(f"🆔 ID: `{product['id']}`")
+    return "\n".join(lines)
 
 
-def format_catalog(books: list) -> str:
-    if not books:
+def format_catalog(products: list) -> str:
+    if not products:
         return "No products found."
-    return "\n\n".join([format_book(b) for b in books])
+    return "\n\n".join([format_book(p) for p in products])
