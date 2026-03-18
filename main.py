@@ -320,6 +320,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
+    # Handle pending photo attachment
+    if user_id in get_admin_ids() and context.user_data.get("pending_photo"):
+        from catalog import search_books
+        results = search_books(user_message)
+        if results:
+            product = results[0]
+            image_url = context.user_data.pop("pending_photo")
+            supabase.table("books").update({"image_url": image_url}).eq("id", product["id"]).execute()
+            await update.message.reply_text(
+                f"✅ Photo attached to *{product['title']}*!",
+                parse_mode="Markdown"
+            )
+            return
+
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
 
