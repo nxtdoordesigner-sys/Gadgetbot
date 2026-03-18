@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from bot import handle_message, add_to_cart, view_cart, ADMIN_IDS
+from bot import handle_message, add_to_cart, view_cart, get_admin_ids
 from catalog import get_all_books, search_books, format_catalog, get_book_by_id
 from supabase_client import supabase
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name
     user_id = update.effective_user.id
-    is_admin = user_id in ADMIN_IDS
+    is_admin = user_id in get_admin_ids()
 
     if is_admin:
         keyboard = [
@@ -150,7 +150,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = query.from_user.id
-    is_admin = user_id in ADMIN_IDS
+    is_admin = user_id in get_admin_ids()
 
     # ── Customer callbacks
     if data == "browse_catalog":
@@ -234,12 +234,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text(caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "admin_add_product" and is_admin:
-        context.user_data["admin_action"] = "add_product"
         await query.message.reply_text(
-            "➕ Send product details in this format:\n\n"
-            "`Title | Author/Brand | Category | Price`\n\n"
-            "Example: `iPhone 15 Pro | Apple | Phones | 1350000`",
-            parse_mode="Markdown"
+            "➕ Just tell me what product you want to add! Give me the name, brand, category, and price and I'll sort it out."
         )
 
     elif data == "admin_stats" and is_admin:
@@ -311,8 +307,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("admin_action") == "add_photo":
         product_id = context.user_data.get("photo_product_id")
         photo = update.message.photo[-1]  # Highest resolution
-        file = await context.bot.get_file(photo.file_id)
-        image_url = file.file_path  # Telegram CDN URL
+        image_url = photo.file_id  # Store Telegram file_id
 
         supabase.table("books").update({"image_url": image_url}).eq("id", product_id).execute()
         context.user_data.pop("admin_action", None)
@@ -324,32 +319,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
-
-    # Handle admin add_product flow
-    if user_id in ADMIN_IDS and context.user_data.get("admin_action") == "add_product":
-        parts = [p.strip() for p in user_message.split("|")]
-        if len(parts) == 4:
-            title, author, category, price_str = parts
-            try:
-                price = float(price_str.replace(",", "").replace("₦", "").strip())
-                res = supabase.table("books").insert({
-                    "title": title, "author": author,
-                    "category": category, "price": price, "in_stock": True
-                }).execute()
-                if res.data:
-                    book = res.data[0]
-                    context.user_data.pop("admin_action", None)
-                    keyboard = [[InlineKeyboardButton("🖼 Add Photo", callback_data=f"addphoto_{book['id']}")]]
-                    await update.message.reply_text(
-                        f"✅ *{book['title']}* added! ID: `{book['id']}`\n\nWant to add a photo?",
-                        parse_mode="Markdown",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
-                    return
-            except Exception:
-                pass
-        await update.message.reply_text("❌ Wrong format. Use: `Title | Brand | Category | Price`", parse_mode="Markdown")
-        return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
