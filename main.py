@@ -358,11 +358,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Proactively send product photos if bot mentioned specific products
     if user_id not in get_admin_ids():
-        await send_relevant_photos(update.message, reply)
+        await send_relevant_photos(update.message, reply, bot=context.bot)
 
 
 # ── Send product photos based on bot reply ───────────────
-async def send_relevant_photos(message, reply_text: str):
+async def send_relevant_photos(message, reply_text: str, bot=None):
     """Scan bot reply for product names and send their photos if available."""
     try:
         products = get_all_books()
@@ -370,27 +370,40 @@ async def send_relevant_photos(message, reply_text: str):
         for product in products:
             title_lower = product["title"].lower()
             reply_lower = reply_text.lower()
-            # Check if product title appears in bot reply
-            if title_lower in reply_lower and product.get("image_url") and product["id"] not in sent:
-                keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
-                title = product["title"]
-                price = product["price"]
-                neg = " | 💬 Negotiable" if product.get("negotiable") else ""
-                caption = f"*{title}*\n💰 ₦{price:,}{neg}"
-                try:
-                    await message.reply_photo(
-                        photo=product["image_url"],
-                        caption=caption,
-                        parse_mode="Markdown",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
-                    sent.add(product["id"])
-                except Exception:
-                    pass
-                if len(sent) >= 3:  # Cap at 3 photos per reply
-                    break
-    except Exception:
-        pass
+            image_url = product.get("image_url")
+            if not image_url:
+                continue
+            # Match any significant word of product title in reply
+            title_words = [w for w in title_lower.split() if len(w) > 3]
+            if not any(w in reply_lower for w in title_words):
+                continue
+            if product["id"] in sent:
+                continue
+
+            keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
+            title = product["title"]
+            price = product["price"]
+            neg = " | 💬 Negotiable" if product.get("negotiable") else ""
+            caption = f"*{title}*\n💰 ₦{price:,}{neg}"
+
+            # Try sending as file_id first, then as URL
+            try:
+                await message.reply_photo(
+                    photo=image_url,
+                    caption=caption,
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                sent.add(product["id"])
+                logger.info(f"Photo sent for product {product['id']}: {image_url[:30]}")
+            except Exception as e:
+                logger.error(f"Failed to send photo for product {product['id']}: {e}")
+                # Photo failed — skip silently, don't break conversation
+
+            if len(sent) >= 3:
+                break
+    except Exception as e:
+        logger.error(f"send_relevant_photos error: {e}")
 
 
 # ── Main ──────────────────────────────────────────────────
