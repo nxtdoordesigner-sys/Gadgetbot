@@ -94,6 +94,7 @@ WHAT YOU CAN DO:
 4. Broadcast messages to all customers
 5. Answer business questions (orders, revenue, stats)
 6. Add/remove admins
+7. Attach photos to products by name or ID
 
 ADDING PRODUCTS:
 Collect: name, brand, category, price, condition, stock_qty, negotiable (always ask), specs (optional)
@@ -104,6 +105,20 @@ UPDATING PRODUCTS:
 
 REMOVING PRODUCTS:
 ##REMOVEPRODUCT## product_id
+
+ADDING PRODUCT PHOTO:
+When admin says anything like:
+- "add photo for iPhone 11"
+- "I want to add pics for id 5"
+- "attach image to Samsung Galaxy"
+- "add picture for the laptop"
+- "send photo for product 3"
+
+Look up the product name or ID from the catalog, find its ID, then output:
+##ADDPHOTO## product_id
+
+Use the product ID (number), never the name, in the signal.
+After outputting the signal, tell admin: "Go ahead, send the photo! 📸"
 
 MARKING ORDER DELIVERED:
 When admin says "[product] delivered to [customer name]" or "confirm delivery of order #X":
@@ -246,6 +261,29 @@ def parse_order_signal(reply: str):
         return None, None, None, None, None
 
 
+def resolve_product_from_signal(value: str):
+    """
+    Given a string that is either a numeric ID or a product name,
+    return the matching product dict or None.
+    """
+    value = value.strip()
+    # Try numeric ID first
+    if value.isdigit():
+        return get_book_by_id(int(value))
+    # Otherwise search by name
+    all_products = get_all_books()
+    value_lower = value.lower()
+    # Exact match first
+    for p in all_products:
+        if p["title"].lower() == value_lower:
+            return p
+    # Partial match fallback
+    for p in all_products:
+        if value_lower in p["title"].lower():
+            return p
+    return None
+
+
 async def handle_message(user_id: str, user_message: str, bot=None) -> str:
     admin_ids = get_admin_ids()
     session = get_session(user_id)
@@ -318,19 +356,19 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 neg = " | 💬 Negotiable" if p.get("negotiable") else ""
                 stock = p.get("stock_qty", 0)
                 title = p["title"]
-            pid = p["id"]
-            price = p["price"]
-            condition = p.get("condition", "Brand New")
-            lines.append(
-                f"*{title}* (ID: {pid})\n"
-                f"  💰 ₦{price:,}{neg}\n"
-                f"  📦 Stock: {stock} | 🔧 {condition}"
-            )
+                pid = p["id"]
+                price = p["price"]
+                condition = p.get("condition", "Brand New")
+                lines.append(
+                    f"*{title}* (ID: {pid})\n"
+                    f"  💰 ₦{price:,}{neg}\n"
+                    f"  📦 Stock: {stock} | 🔧 {condition}"
+                )
             return "\n\n".join(lines)
         return f"No products found matching '{query}'."
 
     # ── Photo intercept — never let LLM handle this ─────
-    photo_triggers = ["i have the picture", "i have the photo", "i have pictures", 
+    photo_triggers = ["i have the picture", "i have the photo", "i have pictures",
                       "sending the picture", "sending the photo", "ready to send",
                       "i have it", "here's the pic", "here is the pic"]
     if any(t in msg_lower for t in photo_triggers):
@@ -378,6 +416,17 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     reply = response.choices[0].message.content.strip()
     admin_session["history"].append({"role": "assistant", "content": reply})
 
+    # ##ADDPHOTO## — resolve product by ID or name and return signal for main.py to handle
+    addphoto_data = parse_signal(reply, "ADDPHOTO")
+    if addphoto_data:
+        product = resolve_product_from_signal(addphoto_data)
+        if product:
+            clean = clean_reply(reply, ["ADDPHOTO"])
+            # Pass the resolved ID back to main.py via the signal (rewritten with confirmed ID)
+            return clean + f"\n##ADDPHOTO##{product['id']}"
+        else:
+            return clean_reply(reply, ["ADDPHOTO"]) + f"\n\n❓ Couldn't find a product matching '{addphoto_data}'. Try the exact name or ID."
+
     # ##ADDPRODUCT##
     add_data = parse_signal(reply, "ADDPRODUCT")
     if add_data:
@@ -410,9 +459,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         try:
             parts = [p.strip() for p in update_data.split("|")]
             product_id, field, value = int(parts[0]), parts[1], parts[2]
-            # Never allow image updates via text signal — only via photo handler
-            if field in ["image_url", "image", "photo", "specs"] and "image" in str(value).lower():
-                return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nSend the photo directly in chat and I'll attach it! 📸"
             if field in ["image_url", "image", "photo"]:
                 return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nSend the photo directly in chat and I'll attach it! 📸"
             if field in ["price", "base_price", "list_price"]:
@@ -452,7 +498,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 customer_name = order["customer_name"]
                 items_text = ", ".join([i["title"] for i in order.get("items", [])])
 
-                # Notify customer of delivery + request rating
                 try:
                     await bot.send_message(
                         chat_id=int(tg_id),
@@ -468,11 +513,9 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                             f"⭐⭐⭐⭐⭐ 5 - Amazing!"
                         )
                     )
-                    # Store that we're waiting for rating
                     if str(tg_id) not in sessions:
                         sessions[str(tg_id)] = {"history": [], "cart": [], "name": ""}
                     sessions[str(tg_id)]["awaiting_rating"] = order_id
-
                 except Exception:
                     pass
 
@@ -484,7 +527,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     broadcast_data = parse_signal(reply, "BROADCAST")
     if broadcast_data and bot:
         try:
-            # Get all unique customer telegram IDs
             res = supabase.table("orders").select("telegram_id, customer_name").execute()
             orders = res.data or []
             seen = set()
@@ -504,11 +546,10 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                         parse_mode="Markdown"
                     )
                     sent += 1
-                    await asyncio.sleep(0.1)  # Rate limit
+                    await asyncio.sleep(0.1)
                 except Exception:
                     pass
 
-            # Log broadcast
             supabase.table("broadcasts").insert({
                 "message": broadcast_data, "sent_by": str(user_id), "recipient_count": sent
             }).execute()
@@ -596,7 +637,6 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
         items=enriched_items, total=total, location=location,
     )
 
-    # Save phone number
     if order:
         supabase.table("orders").update({"phone_number": phone}).eq("id", order["id"]).execute()
 
@@ -622,20 +662,17 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
             except Exception:
                 pass
 
-        # Schedule order timeout (24hrs)
         asyncio.create_task(order_timeout(order["id"], user_id, bot, enriched_items))
 
     return order
 
 
 async def order_timeout(order_id: int, user_id: str, bot, items: list):
-    """Auto-cancel unpaid orders after 24 hours and restock items."""
-    await asyncio.sleep(24 * 60 * 60)  # 24 hours
+    await asyncio.sleep(24 * 60 * 60)
     try:
         res = supabase.table("orders").select("status").eq("id", order_id).single().execute()
         if res.data and res.data["status"] == "pending":
             supabase.table("orders").update({"status": "cancelled"}).eq("id", order_id).execute()
-            # Restock
             for item in items:
                 product = get_book_by_id(item["book_id"])
                 if product:
@@ -643,7 +680,6 @@ async def order_timeout(order_id: int, user_id: str, bot, items: list):
                     supabase.table("books").update({
                         "stock_qty": new_stock, "in_stock": True
                     }).eq("id", item["book_id"]).execute()
-            # Notify customer
             try:
                 await bot.send_message(
                     chat_id=int(user_id),
@@ -659,7 +695,6 @@ async def order_timeout(order_id: int, user_id: str, bot, items: list):
 
 
 async def notify_order_confirmed(order_id: int, bot):
-    """Call this when admin confirms an order."""
     try:
         res = supabase.table("orders").select("*").eq("id", order_id).single().execute()
         if res.data:
