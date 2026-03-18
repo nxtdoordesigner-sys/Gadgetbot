@@ -1,8 +1,8 @@
 import os
 import asyncio
 from reports import generate_report
-from datetime import datetime, timezone, timedelta
-from groq import Groq
+from datetime import datetime, timezone
+import google.generativeai as genai
 from catalog import get_all_books, get_book_by_id
 from orders import create_order
 from supabase_client import supabase
@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 PAYSTACK_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "")
 
 sessions = {}
-SESSION_TIMEOUT_MINUTES = 30  # Reset session after 30min inactivity
+SESSION_TIMEOUT_MINUTES = 30
 
 
 def get_admin_ids() -> list:
@@ -118,7 +118,7 @@ You're chatting with store admin. Be helpful, conversational, and proactive.
 
 PERSONALITY:
 - Talk like a smart business partner
-- Be concise but thorough  
+- Be concise but thorough
 - Proactively ask follow-up questions when info is missing
 - Confirm actions before executing
 
@@ -168,7 +168,7 @@ ADDING ADMIN:
 
 REPORTS (admin can trigger these by saying):
 - "send me the orders report"
-- "send inventory sheet"  
+- "send inventory sheet"
 - "send revenue report"
 - "send customer list"
 - "send low stock report"
@@ -188,7 +188,6 @@ def get_session(user_id: str) -> dict:
             sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now, "photos_sent": set()}
         else:
             sessions[user_id]["last_active"] = now
-            # ensure photos_sent exists on old sessions
             if "photos_sent" not in sessions[user_id]:
                 sessions[user_id]["photos_sent"] = set()
     return sessions[user_id]
@@ -315,6 +314,36 @@ def resolve_product_from_signal(value: str):
     return None
 
 
+def _call_gemini(system_prompt: str, history: list, temperature: float = 0.7, max_tokens: int = 500) -> str:
+    """
+    Calls Gemini 1.5 Flash with a system prompt and conversation history.
+    History format: [{"role": "user"/"assistant", "content": "..."}]
+    Returns the reply text.
+    """
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=system_prompt,
+        generation_config=genai.GenerationConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+    )
+
+    # Convert history to Gemini format
+    # Gemini uses "user" and "model" roles (not "assistant")
+    gemini_history = []
+    for msg in history[:-1]:  # all but last message
+        role = "model" if msg["role"] == "assistant" else "user"
+        gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+    chat = model.start_chat(history=gemini_history)
+
+    # Send the last user message
+    last_message = history[-1]["content"] if history else ""
+    response = chat.send_message(last_message)
+    return response.text.strip()
+
+
 async def handle_message(user_id: str, user_message: str, bot=None) -> str:
     admin_ids = get_admin_ids()
     session = get_session(user_id)
@@ -431,14 +460,16 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         f"=== FULL PRODUCT CATALOG ===\n{catalog_context}\n\n"
         f"Use the catalog above to answer ANY questions about products, prices, stock, categories etc."
     )
-    messages = [
-        {"role": "system", "content": system_content},
-        *admin_session["history"][-12:],
-    ]
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile", messages=messages, temperature=0.4, max_tokens=800,
-    )
-    reply = response.choices[0].message.content.strip()
+
+    try:
+        reply = _call_gemini(system_content, admin_session["history"][-12:], temperature=0.4, max_tokens=800)
+    except Exception as e:
+        admin_session["history"].pop()
+        err = str(e).lower()
+        if "quota" in err or "rate" in err or "429" in err:
+            return "⚡ Gemini rate limit hit. Try again in a moment!"
+        return f"😔 AI error: {e}"
+
     admin_session["history"].append({"role": "assistant", "content": reply})
 
     addphoto_data = parse_signal(reply, "ADDPHOTO")
@@ -510,13 +541,11 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 "status": "delivered",
                 "delivered_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", order_id).execute()
-
             if res.data:
                 order = res.data[0]
                 tg_id = order["telegram_id"]
                 customer_name = order["customer_name"]
                 items_text = ", ".join([i["title"] for i in order.get("items", [])])
-
                 try:
                     await bot.send_message(
                         chat_id=int(tg_id),
@@ -525,11 +554,7 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                             f"Items: {items_text}\n\n"
                             f"Hope you love it! 🔥 How was your experience shopping with VoltStore?\n\n"
                             f"Reply with a number:\n"
-                            f"⭐ 1 - Poor\n"
-                            f"⭐⭐ 2 - Fair\n"
-                            f"⭐⭐⭐ 3 - Good\n"
-                            f"⭐⭐⭐⭐ 4 - Great\n"
-                            f"⭐⭐⭐⭐⭐ 5 - Amazing!"
+                            f"⭐ 1 - Poor\n⭐⭐ 2 - Fair\n⭐⭐⭐ 3 - Good\n⭐⭐⭐⭐ 4 - Great\n⭐⭐⭐⭐⭐ 5 - Amazing!"
                         )
                     )
                     if str(tg_id) not in sessions:
@@ -537,8 +562,7 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                     sessions[str(tg_id)]["awaiting_rating"] = order_id
                 except Exception:
                     pass
-
-                return clean_reply(reply, ["DELIVERED"]) + f"\n\n✅ Order #{order_id} marked as delivered. Customer has been notified and asked for a rating!"
+                return clean_reply(reply, ["DELIVERED"]) + f"\n\n✅ Order #{order_id} marked as delivered. Customer notified and asked for a rating!"
         except Exception as e:
             return clean_reply(reply, ["DELIVERED"]) + f"\n\n❌ Error: {e}"
 
@@ -554,7 +578,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 if tid not in seen:
                     seen.add(tid)
                     recipients.append(o)
-
             sent = 0
             for r in recipients:
                 try:
@@ -567,11 +590,9 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                     await asyncio.sleep(0.1)
                 except Exception:
                     pass
-
             supabase.table("broadcasts").insert({
                 "message": broadcast_data, "sent_by": str(user_id), "recipient_count": sent
             }).execute()
-
             return clean_reply(reply, ["BROADCAST"]) + f"\n\n📢 Broadcast sent to {sent} customer(s)!"
         except Exception as e:
             return clean_reply(reply, ["BROADCAST"]) + f"\n\n❌ Error: {e}"
@@ -608,20 +629,29 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     catalog_context = build_catalog_context()
     session["history"].append({"role": "user", "content": user_message})
 
-    # Pass which product photos have already been sent so the AI knows
     photos_sent = session.get("photos_sent", set())
     photos_sent_note = ""
     if photos_sent:
         photos_sent_note = f"\n\nPHOTOS ALREADY SENT THIS SESSION (do NOT trigger again): product IDs {', '.join(str(i) for i in photos_sent)}"
 
-    messages = [
-        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\nAlways reference actual products and prices from the catalog above.{photos_sent_note}"},
-        *session["history"][-12:],
-    ]
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile", messages=messages, temperature=0.7, max_tokens=500,
+    system_prompt = (
+        f"{CUSTOMER_PROMPT}\n\n"
+        f"=== PRODUCT CATALOG ===\n{catalog_context}\n\n"
+        f"Always reference actual products and prices from the catalog above.{photos_sent_note}"
     )
-    reply = response.choices[0].message.content.strip()
+
+    try:
+        reply = _call_gemini(system_prompt, session["history"][-12:], temperature=0.7, max_tokens=500)
+    except Exception as e:
+        session["history"].pop()
+        err = str(e).lower()
+        if "quota" in err or "rate" in err or "429" in err:
+            return (
+                "⚡ We're experiencing very high traffic right now and I need a quick breather!\n\n"
+                "Please try again in a few minutes — I'll be right back. No wahala! 🙏"
+            )
+        return "😔 Something went wrong on my end. Please try again in a moment!"
+
     session["history"].append({"role": "assistant", "content": reply})
 
     customer_name, order_items, location, phone, agreed_prices = parse_order_signal(reply)
