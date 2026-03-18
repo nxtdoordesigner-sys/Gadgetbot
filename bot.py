@@ -2,7 +2,7 @@ import os
 import asyncio
 from reports import generate_report
 from datetime import datetime, timezone
-import google.generativeai as genai
+from groq import Groq, RateLimitError, APIError
 from catalog import get_all_books, get_book_by_id
 from orders import create_order
 from supabase_client import supabase
@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 PAYSTACK_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "")
 
 sessions = {}
@@ -314,36 +314,6 @@ def resolve_product_from_signal(value: str):
     return None
 
 
-def _call_gemini(system_prompt: str, history: list, temperature: float = 0.7, max_tokens: int = 500) -> str:
-    """
-    Calls Gemini 1.5 Flash with a system prompt and conversation history.
-    History format: [{"role": "user"/"assistant", "content": "..."}]
-    Returns the reply text.
-    """
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=system_prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-        )
-    )
-
-    # Convert history to Gemini format
-    # Gemini uses "user" and "model" roles (not "assistant")
-    gemini_history = []
-    for msg in history[:-1]:  # all but last message
-        role = "model" if msg["role"] == "assistant" else "user"
-        gemini_history.append({"role": role, "parts": [msg["content"]]})
-
-    chat = model.start_chat(history=gemini_history)
-
-    # Send the last user message
-    last_message = history[-1]["content"] if history else ""
-    response = chat.send_message(last_message)
-    return response.text.strip()
-
-
 async def handle_message(user_id: str, user_message: str, bot=None) -> str:
     admin_ids = get_admin_ids()
     session = get_session(user_id)
@@ -460,16 +430,26 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         f"=== FULL PRODUCT CATALOG ===\n{catalog_context}\n\n"
         f"Use the catalog above to answer ANY questions about products, prices, stock, categories etc."
     )
+    messages = [
+        {"role": "system", "content": system_content},
+        *admin_session["history"][-12:],
+    ]
 
     try:
-        reply = _call_gemini(system_content, admin_session["history"][-12:], temperature=0.4, max_tokens=800)
-    except Exception as e:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile", messages=messages, temperature=0.4, max_tokens=800,
+        )
+    except RateLimitError:
         admin_session["history"].pop()
-        err = str(e).lower()
-        if "quota" in err or "rate" in err or "429" in err:
-            return "⚡ Gemini rate limit hit. Try again in a moment!"
-        return f"😔 AI error: {e}"
+        return (
+            "⚡ Groq rate limit hit — daily token cap reached.\n\n"
+            "Wait ~20 mins for reset, or check console.groq.com/settings/billing"
+        )
+    except APIError as e:
+        admin_session["history"].pop()
+        return f"😔 API error: {e}"
 
+    reply = response.choices[0].message.content.strip()
     admin_session["history"].append({"role": "assistant", "content": reply})
 
     addphoto_data = parse_signal(reply, "ADDPHOTO")
@@ -634,24 +614,26 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     if photos_sent:
         photos_sent_note = f"\n\nPHOTOS ALREADY SENT THIS SESSION (do NOT trigger again): product IDs {', '.join(str(i) for i in photos_sent)}"
 
-    system_prompt = (
-        f"{CUSTOMER_PROMPT}\n\n"
-        f"=== PRODUCT CATALOG ===\n{catalog_context}\n\n"
-        f"Always reference actual products and prices from the catalog above.{photos_sent_note}"
-    )
+    messages = [
+        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\nAlways reference actual products and prices from the catalog above.{photos_sent_note}"},
+        *session["history"][-12:],
+    ]
 
     try:
-        reply = _call_gemini(system_prompt, session["history"][-12:], temperature=0.7, max_tokens=500)
-    except Exception as e:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile", messages=messages, temperature=0.7, max_tokens=500,
+        )
+    except RateLimitError:
         session["history"].pop()
-        err = str(e).lower()
-        if "quota" in err or "rate" in err or "429" in err:
-            return (
-                "⚡ We're experiencing very high traffic right now and I need a quick breather!\n\n"
-                "Please try again in a few minutes — I'll be right back. No wahala! 🙏"
-            )
+        return (
+            "⚡ We're experiencing very high traffic right now and I need a quick breather!\n\n"
+            "Please try again in a few minutes — I'll be right back. No wahala! 🙏"
+        )
+    except APIError as e:
+        session["history"].pop()
         return "😔 Something went wrong on my end. Please try again in a moment!"
 
+    reply = response.choices[0].message.content.strip()
     session["history"].append({"role": "assistant", "content": reply})
 
     customer_name, order_items, location, phone, agreed_prices = parse_order_signal(reply)
