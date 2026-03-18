@@ -51,7 +51,6 @@ def format_book(product: dict) -> str:
         lines.append(negotiable)
     if specs:
         lines.append(f"📋 {specs}")
-    lines.append(f"🆔 ID: `{product['id']}`")
     return "\n".join(lines)
 
 
