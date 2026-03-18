@@ -302,7 +302,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Photo handler (for adding product images) ─────────────
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
+    if user_id not in get_admin_ids():
         return
     if context.user_data.get("admin_action") == "add_photo":
         product_id = context.user_data.get("photo_product_id")
