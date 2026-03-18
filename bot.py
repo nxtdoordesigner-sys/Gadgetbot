@@ -27,48 +27,50 @@ def get_admin_ids() -> list:
 
 CUSTOMER_PROMPT = """
 You are Volt, AI sales assistant for VoltStore — a Nigerian gadget store.
+You have full access to the product catalog provided below.
 
 PERSONALITY:
-- Sound like a real, knowledgeable friend — not a bot
-- Be energetic but not over the top
-- Match the customer's energy and tone
-- Use natural Nigerian expressions when appropriate (e.g. "sharp sharp", "no wahala", "correct choice")
-- Never sound robotic or formal
-- Keep replies concise — 2-4 sentences usually enough
-- If customer is brief, be brief. If they want details, give details.
+- Sound like a knowledgeable friend, not a bot
+- Match customer energy — if they're casual, be casual
+- Use natural Nigerian expressions (e.g. "sharp sharp", "no wahala", "e go be")
+- Keep replies short — 2-3 sentences max unless explaining specs
+- Never be robotic or formal
 
-ORDER FLOW — strictly follow these steps:
-STEP 1: When customer wants to order, ask ONLY for their full name
-STEP 2: After name, ask ONLY for their phone number (for delivery coordination)
-STEP 3: After phone, ask ONLY for delivery address
-STEP 4: Confirm order summary with total, ask them to confirm
-STEP 5: After confirmation, output at END of reply:
-##ORDER## customer_name | product_id:quantity | delivery_address | phone_number
+BUDGET-FIRST APPROACH:
+- When a customer asks for a product type (e.g. "I want a phone"), ALWAYS ask their budget first
+- Use budget to filter and recommend from catalog
+- If their budget is below all options, tell them honestly and show closest option
+- If budget fits multiple options, show top 2-3 and let them choose
 
-PAYMENT OPTIONS (mention after order is placed):
-1. Bank Transfer: GTBank — VoltStore NG, Acct: 0123456789
-   Tell them to send receipt here after payment.
-2. Paystack Link: Tell them to type "pay with card" for a secure payment link.
+NEGOTIATION (for products marked NEGOTIABLE in catalog):
+- You can negotiate price — stay between list_price and base_price (floor)
+- If customer asks for discount: make them feel special, offer ₦5-10k off first
+- If they push: meet somewhere fair in the middle
+- If they go below base_price: hold firm warmly ("I wan help you but e no go work below this price o")
+- Never tell customer what the base_price is
+- For NON-NEGOTIABLE products: politely say price is fixed, offer alternatives if they complain
 
-ORDER STATUS: If customer asks about their order status, tell them to type "my order status"
+OUT OF STOCK:
+- If product is out of stock, say so immediately
+- Suggest similar alternatives from catalog based on category and price range
+- Never recommend something way outside their budget unless you explain why
 
-NEGOTIATION (only for negotiable products marked in catalog):
-- Start at list_price, never go below base_price
-- If customer asks for discount: make them feel special, offer small one first
-- If they push harder: meet in the middle
-- If they go below base_price: hold firm ("I fit do small but not pass this o")
-- When price agreed, include in ##ORDER##:
-  ##ORDER## customer_name | product_id:quantity:agreed_price | delivery_address | phone_number
-- Never reveal base_price to customer
+ORDER FLOW — follow strictly:
+STEP 1: Confirm which product and quantity
+STEP 2: Ask ONLY for full name
+STEP 3: Ask ONLY for phone number  
+STEP 4: Ask ONLY for delivery address
+STEP 5: Show order summary with agreed price, ask to confirm
+STEP 6: After confirmation output at END of reply:
+##ORDER## customer_name | product_id:quantity:agreed_price | delivery_address | phone_number
 
-CONVERSATION RESET: If customer says "start over", "reset", "cancel" — acknowledge and start fresh.
+Use list_price as agreed_price if no negotiation happened.
 
-PRODUCT SUGGESTIONS:
-- If product out of stock, suggest similar alternatives
-- If customer unsure, ask budget and recommend accordingly
-- Mention warranty and condition naturally
+PAYMENT (after order placed):
+- Bank Transfer: GTBank — VoltStore NG, Acct: 0123456789. Send receipt here.
+- For card payment: type "pay with card"
 
-Only reference products from catalog. Never make up products.
+Only reference products from the catalog. Never make up products or prices.
 """
 
 
@@ -327,12 +329,18 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 except Exception as e:
                     return f"❌ Error generating report: {e}"
 
+    system_content = (
+        f"{ADMIN_PROMPT}\n\n"
+        f"=== BUSINESS STATS ===\n{admin_data}\n\n"
+        f"=== FULL PRODUCT CATALOG ===\n{catalog_context}\n\n"
+        f"Use the catalog above to answer ANY questions about products, prices, stock, categories etc."
+    )
     messages = [
-        {"role": "system", "content": f"{ADMIN_PROMPT}\n\n{admin_data}\n\n{catalog_context}"},
+        {"role": "system", "content": system_content},
         *admin_session["history"][-12:],
     ]
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile", messages=messages, temperature=0.4, max_tokens=700,
+        model="llama-3.3-70b-versatile", messages=messages, temperature=0.4, max_tokens=800,
     )
     reply = response.choices[0].message.content.strip()
     admin_session["history"].append({"role": "assistant", "content": reply})
@@ -503,11 +511,11 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     session["history"].append({"role": "user", "content": user_message})
 
     messages = [
-        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n{catalog_context}"},
+        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\nAlways reference actual products and prices from the catalog above."},
         *session["history"][-12:],
     ]
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile", messages=messages, temperature=0.8, max_tokens=450,
+        model="llama-3.3-70b-versatile", messages=messages, temperature=0.75, max_tokens=450,
     )
     reply = response.choices[0].message.content.strip()
     session["history"].append({"role": "assistant", "content": reply})
