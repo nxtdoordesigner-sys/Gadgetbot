@@ -353,12 +353,10 @@ async def send_relevant_photos(message, reply_text: str):
             # Check if product title appears in bot reply
             if title_lower in reply_lower and product.get("image_url") and product["id"] not in sent:
                 keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
-                caption = (
-                    f"*{product['title']}*
-"
-                    f"💰 ₦{product['price']:,}"
-                    + (" | 💬 Negotiable" if product.get("negotiable") else "")
-                )
+                title = product["title"]
+                price = product["price"]
+                neg = " | 💬 Negotiable" if product.get("negotiable") else ""
+                caption = f"*{title}*\n💰 ₦{price:,}{neg}"
                 try:
                     await message.reply_photo(
                         photo=product["image_url"],
