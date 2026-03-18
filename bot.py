@@ -305,8 +305,38 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     admin_session = sessions[admin_key]
     admin_session["history"].append({"role": "user", "content": user_message})
 
-    # ── Report triggers ──────────────────────────────────
+    # ── Direct catalog lookup — bypass LLM for speed ────
     msg_lower = user_message.lower()
+
+    if msg_lower.startswith("show me ") or msg_lower.startswith("show "):
+        query = msg_lower.replace("show me ", "").replace("show ", "").strip()
+        from catalog import search_books
+        results = search_books(query)
+        if results:
+            lines = []
+            for p in results[:5]:
+                neg = " | 💬 Negotiable" if p.get("negotiable") else ""
+                stock = p.get("stock_qty", 0)
+                title = p["title"]
+            pid = p["id"]
+            price = p["price"]
+            condition = p.get("condition", "Brand New")
+            lines.append(
+                f"*{title}* (ID: {pid})\n"
+                f"  💰 ₦{price:,}{neg}\n"
+                f"  📦 Stock: {stock} | 🔧 {condition}"
+            )
+            return "\n\n".join(lines)
+        return f"No products found matching '{query}'."
+
+    # ── Photo intercept — never let LLM handle this ─────
+    photo_triggers = ["i have the picture", "i have the photo", "i have pictures", 
+                      "sending the picture", "sending the photo", "ready to send",
+                      "i have it", "here's the pic", "here is the pic"]
+    if any(t in msg_lower for t in photo_triggers):
+        return "Go ahead, send it! 📸"
+
+    # ── Report triggers ──────────────────────────────────
     report_map = {
         "orders report": "orders",
         "inventory sheet": "inventory",
