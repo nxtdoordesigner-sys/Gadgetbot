@@ -322,7 +322,57 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
+
+    # Extract ##LASTADDED## marker if present
+    last_added_id = None
+    if "##LASTADDED##" in reply:
+        try:
+            last_added_id = int(reply.split("##LASTADDED##")[1].strip())
+            reply = reply.split("##LASTADDED##")[0].strip()
+            context.user_data["last_added_product_id"] = last_added_id
+        except Exception:
+            pass
+
+    # Send reply text
     await update.message.reply_text(reply, parse_mode="Markdown")
+
+    # Proactively send product photos if bot mentioned specific products
+    if user_id not in get_admin_ids():
+        await send_relevant_photos(update.message, reply)
+
+
+# ── Send product photos based on bot reply ───────────────
+async def send_relevant_photos(message, reply_text: str):
+    """Scan bot reply for product names and send their photos if available."""
+    try:
+        products = get_all_books()
+        sent = set()
+        for product in products:
+            title_lower = product["title"].lower()
+            reply_lower = reply_text.lower()
+            # Check if product title appears in bot reply
+            if title_lower in reply_lower and product.get("image_url") and product["id"] not in sent:
+                keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
+                caption = (
+                    f"*{product['title']}*
+"
+                    f"💰 ₦{product['price']:,}"
+                    + (" | 💬 Negotiable" if product.get("negotiable") else "")
+                )
+                try:
+                    await message.reply_photo(
+                        photo=product["image_url"],
+                        caption=caption,
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    sent.add(product["id"])
+                except Exception:
+                    pass
+                if len(sent) >= 3:  # Cap at 3 photos per reply
+                    break
+    except Exception:
+        pass
 
 
 # ── Main ──────────────────────────────────────────────────
