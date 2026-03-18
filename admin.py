@@ -3,13 +3,14 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 from supabase_client import supabase
 from orders import get_orders_by_user, format_order_summary
+from bot import notify_order_confirmed, get_admin_ids
 
 # ── Admin IDs (add more as needed) ───────────────────────
 ADMIN_IDS = [5851987998]
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in get_admin_ids()
 
 
 def admin_only(func):
@@ -217,18 +218,10 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if response.data:
         order = response.data[0]
         await update.message.reply_text(
-            f"✅ Order #{order_id} confirmed!\n"
-            f"Customer TG ID: `{order['telegram_id']}`",
+            f"✅ Order #{order_id} confirmed!",
             parse_mode="Markdown"
         )
-        # Notify customer
-        try:
-            await context.bot.send_message(
-                chat_id=int(order["telegram_id"]),
-                text=f"🎉 Your order #{order_id} has been confirmed! We'll process it right away. Thank you for shopping with Cupabooks! 📚"
-            )
-        except Exception:
-            pass  # Customer may have blocked the bot
+        await notify_order_confirmed(order_id, context.bot)  # Customer may have blocked the bot
     else:
         await update.message.reply_text(f"❌ Order #{order_id} not found.")
 
