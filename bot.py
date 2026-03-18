@@ -55,25 +55,60 @@ OUT OF STOCK:
 - Suggest similar alternatives from catalog based on category and price range
 - Never recommend something way outside their budget unless you explain why
 
-ORDER FLOW — follow strictly:
-STEP 1: Confirm which product and quantity
-STEP 2: Ask ONLY for full name
-STEP 3: Ask ONLY for phone number  
-STEP 4: Ask ONLY for delivery address
-STEP 5: Show order summary with agreed price, ask to confirm
-STEP 6: After confirmation output at END of reply:
+PHOTOS:
+- ONLY mention a product photo ONCE per conversation — the first time you recommend or describe that product
+- After that, NEVER reference or trigger the photo again even if you mention the product again
+- If a customer explicitly asks "can I see a picture?" or "send me photo" — mention the product name clearly so the photo sends
+- Do NOT say "photo is attached" or "here's the photo" on every message — say it only the first time
+
+ORDER FLOW — follow this STRICTLY, one step at a time, no skipping:
+
+STEP 1 — PRODUCT CONFIRMATION:
+When customer shows interest in buying, confirm exactly which product and quantity.
+Do NOT ask for name or address yet.
+
+STEP 2 — LOCATION CHECK:
+Ask: "Are you in Port Harcourt or another state?"
+- If Port Harcourt: ask if they want DELIVERY or PICKUP
+  - Pickup address: A16 Everyday Plaza, Choba, Port Harcourt
+  - Delivery: collect their full address
+- If another state: tell them we do interstate delivery and ask for their full address
+
+STEP 3 — FULL NAME:
+Ask ONLY for their full name. Nothing else.
+
+STEP 4 — PHONE NUMBER:
+Ask ONLY for their phone number. Nothing else.
+
+STEP 5 — ORDER SUMMARY:
+Show a clean summary:
+  Product, quantity, agreed price
+  Delivery/Pickup address
+  Name, phone
+Then ask: "Shall I confirm this order?"
+
+STEP 6 — AFTER CONFIRMATION:
+Output at END of reply (hidden from customer view):
 ##ORDER## customer_name | product_id:quantity:agreed_price | delivery_address | phone_number
 
+For pickup orders, use "Pickup — A16 Everyday Plaza, Choba, PH" as the delivery_address.
 Use list_price as agreed_price if no negotiation happened.
 
-PAYMENT (after order placed):
+IMPORTANT:
+- Never ask for name and address in the same message
+- Never skip steps
+- Never ask for payment before confirming the order
+- If customer goes off-topic mid-order, gently bring them back to the current step
+
+PAYMENT (after order confirmed):
 - Bank Transfer: GTBank — VoltStore NG, Acct: 0123456789. Send receipt here.
 - For card payment: type "pay with card"
 
-Only reference products from the catalog. Never make up products or prices.
+SHOP INFO:
+- Pickup address: A16 Everyday Plaza, Choba, Port Harcourt
+- If customer asks for shop location or address, give them the above
 
-PHOTOS: When you mention or recommend a product, photos are automatically sent if available.
-If customer asks "can I see a picture?" or "send me a photo" — tell them the photo is being sent and mention the product name clearly so it triggers automatically.
+Only reference products from the catalog. Never make up products or prices.
 """
 
 
@@ -146,20 +181,24 @@ Base answers on business data provided.
 def get_session(user_id: str) -> dict:
     now = datetime.now(timezone.utc)
     if user_id not in sessions:
-        sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now}
+        sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now, "photos_sent": set()}
     else:
         last = sessions[user_id].get("last_active", now)
         if (now - last).total_seconds() > SESSION_TIMEOUT_MINUTES * 60:
-            sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now}
+            sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now, "photos_sent": set()}
         else:
             sessions[user_id]["last_active"] = now
+            # ensure photos_sent exists on old sessions
+            if "photos_sent" not in sessions[user_id]:
+                sessions[user_id]["photos_sent"] = set()
     return sessions[user_id]
 
 
 def reset_session(user_id: str):
     sessions[user_id] = {
         "history": [], "cart": [], "name": "",
-        "last_active": datetime.now(timezone.utc)
+        "last_active": datetime.now(timezone.utc),
+        "photos_sent": set()
     }
 
 
@@ -262,22 +301,14 @@ def parse_order_signal(reply: str):
 
 
 def resolve_product_from_signal(value: str):
-    """
-    Given a string that is either a numeric ID or a product name,
-    return the matching product dict or None.
-    """
     value = value.strip()
-    # Try numeric ID first
     if value.isdigit():
         return get_book_by_id(int(value))
-    # Otherwise search by name
     all_products = get_all_books()
     value_lower = value.lower()
-    # Exact match first
     for p in all_products:
         if p["title"].lower() == value_lower:
             return p
-    # Partial match fallback
     for p in all_products:
         if value_lower in p["title"].lower():
             return p
@@ -289,16 +320,13 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
     session = get_session(user_id)
     is_admin = int(user_id) in admin_ids
 
-    # Handle reset
     if any(w in user_message.lower() for w in ["start over", "reset", "cancel everything"]):
         reset_session(user_id)
         return "No wahala! 😊 We're starting fresh. What can I help you with?"
 
-    # Handle order status
     if "my order" in user_message.lower() and "status" in user_message.lower():
         return await get_order_status(user_id)
 
-    # Handle paystack request
     if "pay with card" in user_message.lower():
         return (
             "To pay with card, use this Paystack link:\n"
@@ -343,7 +371,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     admin_session = sessions[admin_key]
     admin_session["history"].append({"role": "user", "content": user_message})
 
-    # ── Direct catalog lookup — bypass LLM for speed ────
     msg_lower = user_message.lower()
 
     if msg_lower.startswith("show me ") or msg_lower.startswith("show "):
@@ -367,14 +394,12 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             return "\n\n".join(lines)
         return f"No products found matching '{query}'."
 
-    # ── Photo intercept — never let LLM handle this ─────
     photo_triggers = ["i have the picture", "i have the photo", "i have pictures",
                       "sending the picture", "sending the photo", "ready to send",
                       "i have it", "here's the pic", "here is the pic"]
     if any(t in msg_lower for t in photo_triggers):
         return "Go ahead, send it! 📸"
 
-    # ── Report triggers ──────────────────────────────────
     report_map = {
         "orders report": "orders",
         "inventory sheet": "inventory",
@@ -416,18 +441,15 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     reply = response.choices[0].message.content.strip()
     admin_session["history"].append({"role": "assistant", "content": reply})
 
-    # ##ADDPHOTO## — resolve product by ID or name and return signal for main.py to handle
     addphoto_data = parse_signal(reply, "ADDPHOTO")
     if addphoto_data:
         product = resolve_product_from_signal(addphoto_data)
         if product:
             clean = clean_reply(reply, ["ADDPHOTO"])
-            # Pass the resolved ID back to main.py via the signal (rewritten with confirmed ID)
             return clean + f"\n##ADDPHOTO##{product['id']}"
         else:
             return clean_reply(reply, ["ADDPHOTO"]) + f"\n\n❓ Couldn't find a product matching '{addphoto_data}'. Try the exact name or ID."
 
-    # ##ADDPRODUCT##
     add_data = parse_signal(reply, "ADDPRODUCT")
     if add_data:
         try:
@@ -453,7 +475,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply, ["ADDPRODUCT"]) + f"\n\n❌ Error: {e}"
 
-    # ##UPDATEPRODUCT##
     update_data = parse_signal(reply, "UPDATEPRODUCT")
     if update_data:
         try:
@@ -473,7 +494,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply, ["UPDATEPRODUCT"]) + f"\n\n❌ Error: {e}"
 
-    # ##REMOVEPRODUCT##
     remove_data = parse_signal(reply, "REMOVEPRODUCT")
     if remove_data:
         try:
@@ -482,7 +502,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply, ["REMOVEPRODUCT"]) + f"\n\n❌ Error: {e}"
 
-    # ##DELIVERED##
     delivered_data = parse_signal(reply, "DELIVERED")
     if delivered_data and bot:
         try:
@@ -514,7 +533,7 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                         )
                     )
                     if str(tg_id) not in sessions:
-                        sessions[str(tg_id)] = {"history": [], "cart": [], "name": ""}
+                        sessions[str(tg_id)] = {"history": [], "cart": [], "name": "", "photos_sent": set()}
                     sessions[str(tg_id)]["awaiting_rating"] = order_id
                 except Exception:
                     pass
@@ -523,7 +542,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply, ["DELIVERED"]) + f"\n\n❌ Error: {e}"
 
-    # ##BROADCAST##
     broadcast_data = parse_signal(reply, "BROADCAST")
     if broadcast_data and bot:
         try:
@@ -558,7 +576,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply, ["BROADCAST"]) + f"\n\n❌ Error: {e}"
 
-    # ##ADDADMIN##
     addadmin_data = parse_signal(reply, "ADDADMIN")
     if addadmin_data:
         try:
@@ -573,7 +590,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
 
 
 async def handle_customer_message(user_id: str, user_message: str, session: dict, bot=None) -> str:
-    # Handle rating response
     awaiting_rating = session.get("awaiting_rating")
     if awaiting_rating and user_message.strip() in ["1", "2", "3", "4", "5"]:
         rating = int(user_message.strip())
@@ -592,12 +608,18 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     catalog_context = build_catalog_context()
     session["history"].append({"role": "user", "content": user_message})
 
+    # Pass which product photos have already been sent so the AI knows
+    photos_sent = session.get("photos_sent", set())
+    photos_sent_note = ""
+    if photos_sent:
+        photos_sent_note = f"\n\nPHOTOS ALREADY SENT THIS SESSION (do NOT trigger again): product IDs {', '.join(str(i) for i in photos_sent)}"
+
     messages = [
-        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\nAlways reference actual products and prices from the catalog above."},
+        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\nAlways reference actual products and prices from the catalog above.{photos_sent_note}"},
         *session["history"][-12:],
     ]
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile", messages=messages, temperature=0.75, max_tokens=450,
+        model="llama-3.3-70b-versatile", messages=messages, temperature=0.7, max_tokens=500,
     )
     reply = response.choices[0].message.content.strip()
     session["history"].append({"role": "assistant", "content": reply})
