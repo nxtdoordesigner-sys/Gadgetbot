@@ -292,6 +292,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         product_id = int(data.split("_")[1])
         context.user_data["admin_action"] = "add_photo"
         context.user_data["photo_product_id"] = product_id
+        context.user_data["pending_addphoto_id"] = product_id
         await query.message.reply_text(
             f"🖼 Send a photo for product ID `{product_id}`.\n"
             "Just send the image directly in this chat.",
@@ -305,21 +306,20 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in get_admin_ids():
         return
 
-    # Determine which product to attach the photo to
+    # Determine which product to attach the photo to (priority order)
     product_id = None
 
-    # Priority 1: admin clicked "Add Photo" button from inventory
     if context.user_data.get("admin_action") == "add_photo":
         product_id = context.user_data.get("photo_product_id")
-
-    # Priority 2: admin just added a product via chat (##LASTADDED## flow)
+    elif context.user_data.get("pending_addphoto_id"):
+        product_id = context.user_data.get("pending_addphoto_id")
     elif context.user_data.get("last_added_product_id"):
         product_id = context.user_data.get("last_added_product_id")
 
     if not product_id:
         await update.message.reply_text(
             "❓ Not sure which product this photo is for.\n"
-            "Use the 🖼 Add Photo button from inventory, or add a product first."
+            "Try: \"add photo for iPhone 11\" or use the 🖼 Add Photo button from inventory."
         )
         return
 
@@ -350,10 +350,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Step 5: Save the public URL to the books table
         supabase.table("books").update({"image_url": public_url}).eq("id", product_id).execute()
 
-        # Clean up context flags
+        # Clean up all context flags
         context.user_data.pop("admin_action", None)
         context.user_data.pop("photo_product_id", None)
         context.user_data.pop("last_added_product_id", None)
+        context.user_data.pop("pending_addphoto_id", None)
 
         await update.message.reply_text(
             f"✅ Photo uploaded for product ID `{product_id}`!\n\n"
@@ -395,13 +396,24 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
 
-    # Extract ##LASTADDED## marker if present — store product ID for next photo upload
-    last_added_id = None
+    # ── Extract ##LASTADDED## — store product ID for next photo upload
     if "##LASTADDED##" in reply:
         try:
             last_added_id = int(reply.split("##LASTADDED##")[1].strip())
             reply = reply.split("##LASTADDED##")[0].strip()
             context.user_data["last_added_product_id"] = last_added_id
+        except Exception:
+            pass
+
+    # ── Extract ##ADDPHOTO## — admin said "add photo for X" in chat
+    # bot.py resolves the name/ID to a real product ID before returning this signal
+    if "##ADDPHOTO##" in reply:
+        try:
+            photo_product_id = int(reply.split("##ADDPHOTO##")[1].strip())
+            reply = reply.split("##ADDPHOTO##")[0].strip()
+            context.user_data["admin_action"] = "add_photo"
+            context.user_data["photo_product_id"] = photo_product_id
+            context.user_data["pending_addphoto_id"] = photo_product_id
         except Exception:
             pass
 
@@ -425,7 +437,6 @@ async def send_relevant_photos(message, reply_text: str, bot=None):
             image_url = product.get("image_url")
             if not image_url:
                 continue
-            # Match any significant word of product title in reply
             title_words = [w for w in title_lower.split() if len(w) > 3]
             if not any(w in reply_lower for w in title_words):
                 continue
