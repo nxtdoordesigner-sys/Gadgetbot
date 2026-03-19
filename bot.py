@@ -32,7 +32,7 @@ You have full access to the product catalog provided below.
 PERSONALITY:
 - Sound like a real person, not a bot
 - Be warm, friendly and conversational
-- Occasionally use Nigerian expressions naturally — NOT in every message, only when it fits organically
+- Occasionally use Nigerian expressions naturally — NOT in every message, only when it fits
 - Keep replies short — 2-3 sentences max unless explaining specs
 - Never be robotic or stiff
 
@@ -49,7 +49,7 @@ BUDGET-FIRST APPROACH:
 
 NEGOTIATION (for products marked NEGOTIABLE in catalog):
 - You can negotiate price — stay between list_price and base_price (floor)
-- If customer asks for discount: make them feel special, offer ₦5-10k off first
+- If customer asks for discount: make them feel special, offer 5-10k off first
 - If they push: meet somewhere fair in the middle
 - If they go below base_price: hold firm warmly ("I wan help you but e no go work below this price o")
 - Never tell customer what the base_price is
@@ -157,7 +157,7 @@ Look up the product name or ID from the catalog, find its ID, then output:
 ##ADDPHOTO## product_id
 
 Use the product ID (number), never the name, in the signal.
-After outputting the signal, tell admin: "Go ahead, send the photo! 📸"
+After outputting the signal, tell admin: "Go ahead, send the photo!"
 
 MARKING ORDER DELIVERED:
 When admin says "[product] delivered to [customer name]" or "confirm delivery of order #X":
@@ -186,17 +186,25 @@ def get_session(user_id: str) -> dict:
     now = datetime.now(timezone.utc)
     if user_id not in sessions:
         sessions[user_id] = {
-            "history": [], "cart": [], "name": "",
-            "last_active": now, "photos_sent": set(),
-            "awaiting_receipt": False, "last_order_id": None
+            "history": [],
+            "cart": [],
+            "name": "",
+            "last_active": now,
+            "photos_sent": set(),
+            "awaiting_receipt": False,
+            "last_order_id": None,
         }
     else:
         last = sessions[user_id].get("last_active", now)
         if (now - last).total_seconds() > SESSION_TIMEOUT_MINUTES * 60:
             sessions[user_id] = {
-                "history": [], "cart": [], "name": "",
-                "last_active": now, "photos_sent": set(),
-                "awaiting_receipt": False, "last_order_id": None
+                "history": [],
+                "cart": [],
+                "name": "",
+                "last_active": now,
+                "photos_sent": set(),
+                "awaiting_receipt": False,
+                "last_order_id": None,
             }
         else:
             sessions[user_id]["last_active"] = now
@@ -211,11 +219,13 @@ def get_session(user_id: str) -> dict:
 
 def reset_session(user_id: str):
     sessions[user_id] = {
-        "history": [], "cart": [], "name": "",
+        "history": [],
+        "cart": [],
+        "name": "",
         "last_active": datetime.now(timezone.utc),
         "photos_sent": set(),
         "awaiting_receipt": False,
-        "last_order_id": None
+        "last_order_id": None,
     }
 
 
@@ -225,13 +235,17 @@ def build_catalog_context() -> str:
         return "No products currently in stock."
     lines = []
     for p in products:
-        negotiable_info = f" | NEGOTIABLE (floor: ₦{p['base_price']:,})" if p.get("negotiable") and p.get("base_price") else ""
+        negotiable_info = (
+            f" | NEGOTIABLE (floor: N{p['base_price']:,})"
+            if p.get("negotiable") and p.get("base_price")
+            else ""
+        )
         stock = p.get("stock_qty", 1)
         condition = p.get("condition", "Brand New")
         specs = p.get("specs", "")
         lines.append(
-            f"ID:{p['id']} | {p['title']} | {p['author']} | ₦{p['price']:,} | "
-            f"{p.get('category','')} | {condition} | Stock:{stock}{negotiable_info}"
+            f"ID:{p['id']} | {p['title']} | {p['author']} | N{p['price']:,} | "
+            f"{p.get('category', '')} | {condition} | Stock:{stock}{negotiable_info}"
             + (f" | {specs}" if specs else "")
         )
     return "CURRENT CATALOG:\n" + "\n".join(lines)
@@ -264,20 +278,21 @@ def build_admin_data_context() -> str:
 
     recent = all_orders[:5]
     recent_lines = [
-        f"  #{o['id']} | {o['customer_name']} | {o.get('location','N/A')} | ₦{o['total']:,} | {o['status']}"
+        f"  #{o['id']} | {o['customer_name']} | {o.get('location', 'N/A')} | N{o['total']:,} | {o['status']}"
         for o in recent
     ]
 
-    return f"""
-BUSINESS DATA ({now.strftime('%Y-%m-%d %H:%M')} UTC):
-Orders today: {len(today_orders)} | This month: {len(month_orders)} | Pending: {len(pending)} | Confirmed: {len(confirmed)}
-Revenue today: ₦{today_revenue:,} | This month: ₦{month_revenue:,} | All time: ₦{total_revenue:,}
-In stock: {len([p for p in all_products if p['in_stock']])} | Out of stock: {len([p for p in all_products if not p['in_stock']])}
-Low stock (≤2): {', '.join([p['title'] for p in low_stock]) or 'none'}
-Top products: {', '.join([f"{t}({c})" for t,c in top_products]) or 'none yet'}
-Recent orders:
-{chr(10).join(recent_lines) or '  None yet'}
-"""
+    return (
+        f"\nBUSINESS DATA ({now.strftime('%Y-%m-%d %H:%M')} UTC):\n"
+        f"Orders today: {len(today_orders)} | This month: {len(month_orders)} | "
+        f"Pending: {len(pending)} | Confirmed: {len(confirmed)}\n"
+        f"Revenue today: N{today_revenue:,} | This month: N{month_revenue:,} | All time: N{total_revenue:,}\n"
+        f"In stock: {len([p for p in all_products if p['in_stock']])} | "
+        f"Out of stock: {len([p for p in all_products if not p['in_stock']])}\n"
+        f"Low stock (<=2): {', '.join([p['title'] for p in low_stock]) or 'none'}\n"
+        f"Top products: {', '.join([f'{t}({c})' for t, c in top_products]) or 'none yet'}\n"
+        f"Recent orders:\n{chr(10).join(recent_lines) or '  None yet'}\n"
+    )
 
 
 def parse_signal(reply: str, signal: str):
@@ -347,8 +362,8 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
     if "pay with card" in user_message.lower():
         return (
             "To pay with card, use this Paystack link:\n"
-            f"https://paystack.com/pay/voltstore\n\n"
-            "After payment, screenshot your receipt and send it here so we can confirm your order quickly ⚡"
+            "https://paystack.com/pay/voltstore\n\n"
+            "After payment, screenshot your receipt and send it here so we can confirm your order quickly."
         )
 
     if is_admin:
@@ -358,12 +373,10 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
 
 
 async def handle_receipt_photo(user_id: str, file_id: str, file_unique_id: str, bot=None) -> str:
-    """Called from main.py when a customer sends a photo and awaiting_receipt is True."""
     session = get_session(user_id)
     order_id = session.get("last_order_id")
 
     try:
-        # Download from Telegram and upload to Supabase Storage
         import httpx
         tg_file = await bot.get_file(file_id)
         async with httpx.AsyncClient() as client:
@@ -374,71 +387,72 @@ async def handle_receipt_photo(user_id: str, file_id: str, file_unique_id: str, 
         supabase.storage.from_("product-images").upload(
             path=file_name,
             file=image_bytes,
-            file_options={"content-type": "image/jpeg", "upsert": "true"}
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
         )
         receipt_url = supabase.storage.from_("product-images").get_public_url(file_name)
 
-        # Save URL to order
         if order_id:
             supabase.table("orders").update({"receipt_url": receipt_url}).eq("id", order_id).execute()
 
-        # Forward receipt to all admins
-        admin_ids = get_admin_ids()
         if bot and order_id:
-            # Fetch order details for context
             res = supabase.table("orders").select("*").eq("id", order_id).single().execute()
             order = res.data if res.data else {}
             customer_name = order.get("customer_name", "Customer")
             total = order.get("total", 0)
             items_text = ", ".join([i["title"] for i in order.get("items", [])])
-
+            admin_ids = get_admin_ids()
             for admin_id in admin_ids:
                 try:
                     await bot.send_photo(
                         chat_id=admin_id,
                         photo=file_id,
                         caption=(
-                            f"🧾 *Payment Receipt — Order #{order_id}*\n\n"
-                            f"👤 {customer_name}\n"
-                            f"📦 {items_text}\n"
-                            f"💰 ₦{total:,}\n\n"
+                            f"*Payment Receipt — Order #{order_id}*\n\n"
+                            f"Customer: {customer_name}\n"
+                            f"Items: {items_text}\n"
+                            f"Total: N{total:,}\n\n"
                             f"Verify and confirm the order."
                         ),
-                        parse_mode="Markdown"
+                        parse_mode="Markdown",
                     )
                 except Exception:
                     pass
 
-        # Clear awaiting_receipt flag
         session["awaiting_receipt"] = False
-
         return (
-            "Got your receipt! 🙌 We'll verify the payment and confirm your order shortly.\n\n"
+            "Got your receipt! We'll verify the payment and confirm your order shortly.\n\n"
             "You'll get a notification once it's confirmed."
         )
 
-    except Exception as e:
+    except Exception:
         session["awaiting_receipt"] = False
-        return "Got your receipt! We'll verify and confirm your order shortly. 🙌"
+        return "Got your receipt! We'll verify and confirm your order shortly."
 
 
 async def get_order_status(user_id: str) -> str:
-    res = supabase.table("orders").select("*").eq("telegram_id", str(user_id)).order("created_at", desc=True).limit(1).execute()
+    res = (
+        supabase.table("orders")
+        .select("*")
+        .eq("telegram_id", str(user_id))
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
     if not res.data:
-        return "I don't see any orders from you yet. Want to shop? 😊"
+        return "I don't see any orders from you yet. Want to shop?"
     order = res.data[0]
     status_map = {
-        "pending": "⏳ Pending payment confirmation",
-        "confirmed": "✅ Confirmed — being prepared for delivery",
-        "delivered": "📦 Delivered!",
-        "cancelled": "❌ Cancelled"
+        "pending": "Pending payment confirmation",
+        "confirmed": "Confirmed — being prepared for delivery",
+        "delivered": "Delivered!",
+        "cancelled": "Cancelled",
     }
     status = status_map.get(order["status"], order["status"])
     items_text = ", ".join([f"{i['title']} x{i['quantity']}" for i in order.get("items", [])])
     return (
-        f"📦 *Your latest order (#{order['id']}):*\n\n"
+        f"*Your latest order (#{order['id']}):*\n\n"
         f"Items: {items_text}\n"
-        f"Total: ₦{order['total']:,}\n"
+        f"Total: N{order['total']:,}\n"
         f"Status: {status}\n"
         f"Delivery: {order.get('location', 'N/A')}"
     )
@@ -462,25 +476,24 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         if results:
             lines = []
             for p in results[:5]:
-                neg = " | 💬 Negotiable" if p.get("negotiable") else ""
+                neg = " | Negotiable" if p.get("negotiable") else ""
                 stock = p.get("stock_qty", 0)
-                title = p["title"]
-                pid = p["id"]
-                price = p["price"]
                 condition = p.get("condition", "Brand New")
                 lines.append(
-                    f"*{title}* (ID: {pid})\n"
-                    f"  💰 ₦{price:,}{neg}\n"
-                    f"  📦 Stock: {stock} | 🔧 {condition}"
+                    f"*{p['title']}* (ID: {p['id']})\n"
+                    f"  N{p['price']:,}{neg}\n"
+                    f"  Stock: {stock} | {condition}"
                 )
             return "\n\n".join(lines)
         return f"No products found matching '{query}'."
 
-    photo_triggers = ["i have the picture", "i have the photo", "i have pictures",
-                      "sending the picture", "sending the photo", "ready to send",
-                      "i have it", "here's the pic", "here is the pic"]
+    photo_triggers = [
+        "i have the picture", "i have the photo", "i have pictures",
+        "sending the picture", "sending the photo", "ready to send",
+        "i have it", "here's the pic", "here is the pic",
+    ]
     if any(t in msg_lower for t in photo_triggers):
-        return "Go ahead, send it! 📸"
+        return "Go ahead, send it!"
 
     report_map = {
         "orders report": "orders",
@@ -501,11 +514,11 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                         chat_id=int(user_id),
                         document=open(fpath, "rb"),
                         filename=f"VoltStore_{rtype.capitalize()}_Report.xlsx",
-                        caption=f"📊 Here's your {rtype} report! Generated just now."
+                        caption=f"Here's your {rtype} report!",
                     )
-                    return f"📊 {rtype.capitalize()} report sent!"
+                    return f"{rtype.capitalize()} report sent!"
                 except Exception as e:
-                    return f"❌ Error generating report: {e}"
+                    return f"Error generating report: {e}"
 
     system_content = (
         f"{ADMIN_PROMPT}\n\n"
@@ -520,17 +533,17 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
 
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile", messages=messages, temperature=0.4, max_tokens=800,
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.4,
+            max_tokens=800,
         )
     except RateLimitError:
         admin_session["history"].pop()
-        return (
-            "⚡ Groq rate limit hit — daily token cap reached.\n\n"
-            "Wait ~20 mins for reset, or check console.groq.com/settings/billing"
-        )
+        return "Groq rate limit hit. Wait ~20 mins for reset."
     except APIError as e:
         admin_session["history"].pop()
-        return f"😔 API error: {e}"
+        return f"API error: {e}"
 
     reply = response.choices[0].message.content.strip()
     admin_session["history"].append({"role": "assistant", "content": reply})
@@ -542,59 +555,77 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             clean = clean_reply(reply, ["ADDPHOTO"])
             return clean + f"\n##ADDPHOTO##{product['id']}"
         else:
-            return clean_reply(reply, ["ADDPHOTO"]) + f"\n\n❓ Couldn't find a product matching '{addphoto_data}'. Try the exact name or ID."
+            return (
+                clean_reply(reply, ["ADDPHOTO"])
+                + f"\n\nCouldn't find a product matching '{addphoto_data}'. Try the exact name or ID."
+            )
 
     add_data = parse_signal(reply, "ADDPRODUCT")
     if add_data:
         try:
             parts = [p.strip() for p in add_data.split("|")]
-            name, brand, category = parts[0], parts[1], parts[2]
-            price = float(parts[3].replace(",","").replace("₦",""))
+            name = parts[0]
+            brand = parts[1]
+            category = parts[2]
+            price = float(parts[3].replace(",", "").replace("N", ""))
             condition = parts[4] if len(parts) > 4 else "Brand New"
             stock_qty = int(parts[5]) if len(parts) > 5 and parts[5] else 1
             negotiable = parts[6].lower() in ["true", "yes", "1"] if len(parts) > 6 else False
-            base_price = float(parts[7].replace(",","").replace("₦","")) if len(parts) > 7 and parts[7] else price * 0.85
+            base_price = (
+                float(parts[7].replace(",", "").replace("N", ""))
+                if len(parts) > 7 and parts[7]
+                else price * 0.85
+            )
             specs = parts[8] if len(parts) > 8 else None
             res = supabase.table("books").insert({
-                "title": name, "author": brand, "category": category,
-                "price": price, "list_price": price, "base_price": base_price,
-                "condition": condition, "stock_qty": stock_qty,
-                "negotiable": negotiable, "in_stock": True, "specs": specs
+                "title": name,
+                "author": brand,
+                "category": category,
+                "price": price,
+                "list_price": price,
+                "base_price": base_price,
+                "condition": condition,
+                "stock_qty": stock_qty,
+                "negotiable": negotiable,
+                "in_stock": True,
+                "specs": specs,
             }).execute()
             if res.data:
-                new_id = res.data[0]['id']
-                suffix = f"\n\n✅ *{name}* added!\n\nNow send me the product photos and I'll attach them automatically 📸"
+                new_id = res.data[0]["id"]
+                suffix = f"\n\n{name} added! Now send me the product photo and I'll attach it automatically."
                 return clean_reply(reply, ["ADDPRODUCT"]) + suffix + f"##LASTADDED##{new_id}"
-            return clean_reply(reply, ["ADDPRODUCT"]) + "\n\n❌ Failed to add."
+            return clean_reply(reply, ["ADDPRODUCT"]) + "\n\nFailed to add."
         except Exception as e:
-            return clean_reply(reply, ["ADDPRODUCT"]) + f"\n\n❌ Error: {e}"
+            return clean_reply(reply, ["ADDPRODUCT"]) + f"\n\nError: {e}"
 
     update_data = parse_signal(reply, "UPDATEPRODUCT")
     if update_data:
         try:
             parts = [p.strip() for p in update_data.split("|")]
-            product_id, field, value = int(parts[0]), parts[1], parts[2]
+            product_id = int(parts[0])
+            field = parts[1]
+            value = parts[2]
             if field in ["image_url", "image", "photo"]:
-                return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nSend the photo directly in chat and I'll attach it! 📸"
+                return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nSend the photo directly in chat and I'll attach it!"
             if field in ["price", "base_price", "list_price"]:
-                value = float(value.replace(",","").replace("₦",""))
+                value = float(value.replace(",", "").replace("N", ""))
             elif field == "stock_qty":
                 value = int(value)
                 supabase.table("books").update({"in_stock": value > 0}).eq("id", product_id).execute()
             elif field == "negotiable":
                 value = value.lower() in ["true", "yes", "1"]
             supabase.table("books").update({field: value}).eq("id", product_id).execute()
-            return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\n✅ Updated!"
+            return clean_reply(reply, ["UPDATEPRODUCT"]) + "\n\nUpdated!"
         except Exception as e:
-            return clean_reply(reply, ["UPDATEPRODUCT"]) + f"\n\n❌ Error: {e}"
+            return clean_reply(reply, ["UPDATEPRODUCT"]) + f"\n\nError: {e}"
 
     remove_data = parse_signal(reply, "REMOVEPRODUCT")
     if remove_data:
         try:
             supabase.table("books").delete().eq("id", int(remove_data.strip())).execute()
-            return clean_reply(reply, ["REMOVEPRODUCT"]) + "\n\n🗑 Product removed."
+            return clean_reply(reply, ["REMOVEPRODUCT"]) + "\n\nProduct removed."
         except Exception as e:
-            return clean_reply(reply, ["REMOVEPRODUCT"]) + f"\n\n❌ Error: {e}"
+            return clean_reply(reply, ["REMOVEPRODUCT"]) + f"\n\nError: {e}"
 
     delivered_data = parse_signal(reply, "DELIVERED")
     if delivered_data and bot:
@@ -602,7 +633,7 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             order_id = int(delivered_data.strip())
             res = supabase.table("orders").update({
                 "status": "delivered",
-                "delivered_at": datetime.now(timezone.utc).isoformat()
+                "delivered_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", order_id).execute()
             if res.data:
                 order = res.data[0]
@@ -613,21 +644,31 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                     await bot.send_message(
                         chat_id=int(tg_id),
                         text=(
-                            f"📦 Hey {customer_name}! Your order has been delivered!\n\n"
+                            f"Your order has been delivered!\n\n"
                             f"Items: {items_text}\n\n"
-                            f"Hope you love it! 🔥 How was your experience?\n\n"
+                            f"Hope you love it! How was your experience?\n\n"
                             f"Reply with a number:\n"
-                            f"⭐ 1 - Poor\n⭐⭐ 2 - Fair\n⭐⭐⭐ 3 - Good\n⭐⭐⭐⭐ 4 - Great\n⭐⭐⭐⭐⭐ 5 - Amazing!"
-                        )
+                            f"1 - Poor\n2 - Fair\n3 - Good\n4 - Great\n5 - Amazing!"
+                        ),
                     )
                     if str(tg_id) not in sessions:
-                        sessions[str(tg_id)] = {"history": [], "cart": [], "name": "", "photos_sent": set(), "awaiting_receipt": False, "last_order_id": None}
+                        sessions[str(tg_id)] = {
+                            "history": [],
+                            "cart": [],
+                            "name": "",
+                            "photos_sent": set(),
+                            "awaiting_receipt": False,
+                            "last_order_id": None,
+                        }
                     sessions[str(tg_id)]["awaiting_rating"] = order_id
                 except Exception:
                     pass
-                return clean_reply(reply, ["DELIVERED"]) + f"\n\n✅ Order #{order_id} marked as delivered. Customer notified and asked for a rating!"
+                return (
+                    clean_reply(reply, ["DELIVERED"])
+                    + f"\n\nOrder #{order_id} marked as delivered. Customer notified!"
+                )
         except Exception as e:
-            return clean_reply(reply, ["DELIVERED"]) + f"\n\n❌ Error: {e}"
+            return clean_reply(reply, ["DELIVERED"]) + f"\n\nError: {e}"
 
     broadcast_data = parse_signal(reply, "BROADCAST")
     if broadcast_data and bot:
@@ -646,29 +687,31 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 try:
                     await bot.send_message(
                         chat_id=int(r["telegram_id"]),
-                        text=f"📢 *VoltStore Update*\n\n{broadcast_data}",
-                        parse_mode="Markdown"
+                        text=f"VoltStore Update\n\n{broadcast_data}",
                     )
                     sent += 1
                     await asyncio.sleep(0.1)
                 except Exception:
                     pass
             supabase.table("broadcasts").insert({
-                "message": broadcast_data, "sent_by": str(user_id), "recipient_count": sent
+                "message": broadcast_data,
+                "sent_by": str(user_id),
+                "recipient_count": sent,
             }).execute()
-            return clean_reply(reply, ["BROADCAST"]) + f"\n\n📢 Broadcast sent to {sent} customer(s)!"
+            return clean_reply(reply, ["BROADCAST"]) + f"\n\nBroadcast sent to {sent} customer(s)!"
         except Exception as e:
-            return clean_reply(reply, ["BROADCAST"]) + f"\n\n❌ Error: {e}"
+            return clean_reply(reply, ["BROADCAST"]) + f"\n\nError: {e}"
 
     addadmin_data = parse_signal(reply, "ADDADMIN")
     if addadmin_data:
         try:
             parts = [p.strip() for p in addadmin_data.split("|")]
-            tid, name = parts[0], parts[1] if len(parts) > 1 else "Admin"
+            tid = parts[0]
+            name = parts[1] if len(parts) > 1 else "Admin"
             supabase.table("admins").insert({"telegram_id": tid, "name": name}).execute()
-            return clean_reply(reply, ["ADDADMIN"]) + f"\n\n✅ {name} added as admin!"
+            return clean_reply(reply, ["ADDADMIN"]) + f"\n\n{name} added as admin!"
         except Exception as e:
-            return clean_reply(reply, ["ADDADMIN"]) + f"\n\n❌ Error: {e}"
+            return clean_reply(reply, ["ADDADMIN"]) + f"\n\nError: {e}"
 
     return reply
 
@@ -681,11 +724,11 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
         session.pop("awaiting_rating", None)
         stars = "⭐" * rating
         responses = {
-            1: "Sorry to hear that 😔 We'll do better. Thanks for the feedback.",
-            2: "Thanks for being honest. We're working on improving 🙏",
-            3: "Glad it was decent! We're always improving ⚡",
-            4: "Great to hear! Come back anytime 🔥",
-            5: "That made our day! 🎉 Tell your people about us!"
+            1: "Sorry to hear that. We'll do better. Thanks for the feedback.",
+            2: "Thanks for being honest. We're working on improving.",
+            3: "Glad it was decent! We're always improving.",
+            4: "Great to hear! Come back anytime.",
+            5: "That made our day! Tell your people about us!",
         }
         return f"{stars}\n\n{responses[rating]}"
 
@@ -695,23 +738,33 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     photos_sent = session.get("photos_sent", set())
     photos_sent_note = ""
     if photos_sent:
-        photos_sent_note = f"\n\nPHOTOS ALREADY SENT THIS SESSION (do NOT trigger again): product IDs {', '.join(str(i) for i in photos_sent)}"
+        photos_sent_note = (
+            f"\n\nPHOTOS ALREADY SENT THIS SESSION (do NOT trigger again): "
+            f"product IDs {', '.join(str(i) for i in photos_sent)}"
+        )
 
     messages = [
-        {"role": "system", "content": f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\nAlways reference actual products and prices from the catalog above.{photos_sent_note}"},
+        {
+            "role": "system",
+            "content": (
+                f"{CUSTOMER_PROMPT}\n\n=== PRODUCT CATALOG ===\n{catalog_context}\n\n"
+                f"Always reference actual products and prices from the catalog above.{photos_sent_note}"
+            ),
+        },
         *session["history"][-12:],
     ]
 
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile", messages=messages, temperature=0.7, max_tokens=500,
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
         )
     except RateLimitError:
         session["history"].pop()
-        return (
-            "We're experiencing very high traffic right now — please try again in a few minutes! 🙏"
-        )
-    except APIError as e:
+        return "We're experiencing very high traffic right now — please try again in a few minutes!"
+    except APIError:
         session["history"].pop()
         return "Something went wrong on my end. Please try again in a moment!"
 
@@ -720,9 +773,10 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
 
     customer_name, order_items, location, phone, agreed_prices = parse_order_signal(reply)
     if customer_name and order_items and location:
-        order = await save_order(user_id, customer_name, order_items, bot, location, phone or "N/A", agreed_prices or {})
+        order = await save_order(
+            user_id, customer_name, order_items, bot, location, phone or "N/A", agreed_prices or {}
+        )
         if order:
-            # Set awaiting_receipt so next photo from this customer is treated as payment receipt
             session["awaiting_receipt"] = True
             session["last_order_id"] = order["id"]
         return clean_reply(reply, ["ORDER"])
@@ -730,8 +784,15 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     return reply
 
 
-async def save_order(user_id: str, customer_name: str, items: list, bot=None,
-                     location: str = "Not provided", phone: str = "N/A", agreed_prices: dict = {}):
+async def save_order(
+    user_id: str,
+    customer_name: str,
+    items: list,
+    bot=None,
+    location: str = "Not provided",
+    phone: str = "N/A",
+    agreed_prices: dict = {},
+):
     enriched_items = []
     total = 0
 
@@ -740,41 +801,49 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
         if product:
             price = agreed_prices.get(item["book_id"], product.get("list_price") or product["price"])
             enriched_items.append({
-                "book_id": product["id"], "title": product["title"],
-                "quantity": item["quantity"], "price": price,
+                "book_id": product["id"],
+                "title": product["title"],
+                "quantity": item["quantity"],
+                "price": price,
             })
             total += price * item["quantity"]
             new_stock = max(0, product.get("stock_qty", 1) - item["quantity"])
             supabase.table("books").update({
-                "stock_qty": new_stock, "in_stock": new_stock > 0
+                "stock_qty": new_stock,
+                "in_stock": new_stock > 0,
             }).eq("id", product["id"]).execute()
 
     if not enriched_items:
         return None
 
     order = create_order(
-        customer_name=customer_name, telegram_id=user_id,
-        items=enriched_items, total=total, location=location,
+        customer_name=customer_name,
+        telegram_id=user_id,
+        items=enriched_items,
+        total=total,
+        location=location,
     )
 
     if order:
         supabase.table("orders").update({"phone_number": phone}).eq("id", order["id"]).execute()
 
     if order and bot:
-        items_text = "\n".join([f"  • {i['title']} x{i['quantity']} — ₦{i['price']:,}" for i in enriched_items])
-        negotiated = " *(negotiated)*" if agreed_prices else ""
+        items_text = "\n".join([
+            f"  - {i['title']} x{i['quantity']} — N{i['price']:,}"
+            for i in enriched_items
+        ])
+        negotiated = " (negotiated)" if agreed_prices else ""
         admin_ids = get_admin_ids()
-
         admin_msg = (
-            f"🛎 *New Order #{order['id']}!*\n\n"
-            f"👤 *{customer_name}*\n"
-            f"📞 {phone}\n"
-            f"📱 TG ID: `{user_id}` (t.me/user?id={user_id})\n"
-            f"📍 *{location}*\n\n"
+            f"*New Order #{order['id']}!*\n\n"
+            f"Customer: {customer_name}\n"
+            f"Phone: {phone}\n"
+            f"TG ID: {user_id}\n"
+            f"Address: {location}\n\n"
             f"{items_text}\n\n"
-            f"💰 Total: ₦{total:,}{negotiated}\n\n"
-            f"✅ Confirm: `/confirm {order['id']}`\n"
-            f"🚚 Mark delivered: just tell me \"order #{order['id']} delivered to {customer_name}\""
+            f"Total: N{total:,}{negotiated}\n\n"
+            f"Confirm: /confirm {order['id']}\n"
+            f"Mark delivered: tell me 'order #{order['id']} delivered to {customer_name}'"
         )
         for admin_id in admin_ids:
             try:
@@ -798,15 +867,16 @@ async def order_timeout(order_id: int, user_id: str, bot, items: list):
                 if product:
                     new_stock = product.get("stock_qty", 0) + item["quantity"]
                     supabase.table("books").update({
-                        "stock_qty": new_stock, "in_stock": True
+                        "stock_qty": new_stock,
+                        "in_stock": True,
                     }).eq("id", item["book_id"]).execute()
             try:
                 await bot.send_message(
                     chat_id=int(user_id),
                     text=(
-                        f"⚠️ Your order #{order_id} was cancelled because we didn't receive payment within 24 hours.\n\n"
+                        f"Your order #{order_id} was cancelled because we didn't receive payment within 24 hours.\n\n"
                         "If you'd still like to order, just start a new conversation!"
-                    )
+                    ),
                 )
             except Exception:
                 pass
@@ -826,13 +896,12 @@ async def notify_order_confirmed(order_id: int, bot):
             await bot.send_message(
                 chat_id=int(tg_id),
                 text=(
-                    f"🎉 Great news {customer_name}!\n\n"
-                    f"Your order has been *confirmed* ✅\n\n"
+                    f"Great news {customer_name}!\n\n"
+                    f"Your order has been confirmed.\n\n"
                     f"Items: {items_text}\n"
                     f"Delivery to: {location}\n\n"
-                    f"We'll be in touch shortly. Thank you for shopping with VoltStore! ⚡"
+                    f"We'll be in touch shortly. Thank you for shopping with VoltStore!"
                 ),
-                parse_mode="Markdown"
             )
     except Exception:
         pass
@@ -842,24 +911,29 @@ async def add_to_cart(user_id: str, product_id: int, quantity: int = 1) -> str:
     session = get_session(user_id)
     product = get_book_by_id(product_id)
     if not product:
-        return f"❌ Product with ID {product_id} not found."
+        return f"Product with ID {product_id} not found."
     for item in session["cart"]:
         if item["book_id"] == product_id:
             item["quantity"] += quantity
-            return f"✅ Updated cart: *{product['title']}* x{item['quantity']}"
+            return f"Updated cart: {product['title']} x{item['quantity']}"
     session["cart"].append({
-        "book_id": product["id"], "title": product["title"]
-        "quantity": quantity, "price": product.get("list_price") or product["price"],
+        "book_id": product["id"],
+        "title": product["title"],
+        "quantity": quantity,
+        "price": product.get("list_price") or product["price"],
     })
-    return f"✅ Added: *{product['title']}* — ₦{product['price']:,}"
+    return f"Added: {product['title']} — N{product['price']:,}"
 
 
 def view_cart(user_id: str) -> str:
     session = get_session(user_id)
     cart = session.get("cart", [])
     if not cart:
-        return "🛒 Your cart is empty."
-    lines = [f"  • {i['title']} x{i['quantity']} — ₦{i['price'] * i['quantity']:,}" for i in cart]
+        return "Your cart is empty."
+    lines = [
+        f"  - {i['title']} x{i['quantity']} — N{i['price'] * i['quantity']:,}"
+        for i in cart
+    ]
     total = sum(i["price"] * i["quantity"] for i in cart)
-    return "🛒 *Your Cart:*\n" + "\n".join(lines) + f"\n\n💰 Total: ₦{total:,}"
+    return "Your Cart:\n" + "\n".join(lines) + f"\n\nTotal: N{total:,}"
 
