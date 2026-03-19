@@ -1,7 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from bot import handle_message, add_to_cart, view_cart, get_admin_ids, sessions
+from bot import handle_message, add_to_cart, view_cart, get_admin_ids, sessions, handle_receipt_photo
 from catalog import get_all_books, search_books, format_catalog, get_book_by_id
 from supabase_client import supabase
 
@@ -55,7 +55,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ── /catalog — show products with photos ─────────────────
+# ── /catalog ──────────────────────────────────────────────
 async def catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     products = get_all_books()
     if not products:
@@ -78,17 +78,11 @@ async def send_catalog(message, products):
         try:
             if image_url:
                 await message.reply_photo(
-                    photo=image_url,
-                    caption=caption,
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    photo=image_url, caption=caption,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
-                await message.reply_text(
-                    caption,
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                await message.reply_text(caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
             await message.reply_text(caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -230,7 +224,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_add_product" and is_admin:
         await query.message.reply_text(
-            "➕ Just tell me what product you want to add! Give me the name, brand, category, and price and I'll sort it out."
+            "➕ Just tell me what product you want to add! Give me the name, brand, category, and price."
         )
 
     elif data == "admin_stats" and is_admin:
@@ -274,8 +268,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]]
         await query.message.reply_text(
             f"Are you sure you want to delete product ID `{product_id}`?",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     elif data.startswith("confirmdelete_") and is_admin:
@@ -297,59 +290,74 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Photo handler ─────────────────────────────────────────
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in get_admin_ids():
+    is_admin = user_id in get_admin_ids()
+
+    # ── ADMIN: product photo upload
+    if is_admin:
+        product_id = None
+        if context.user_data.get("admin_action") == "add_photo":
+            product_id = context.user_data.get("photo_product_id")
+        elif context.user_data.get("pending_addphoto_id"):
+            product_id = context.user_data.get("pending_addphoto_id")
+        elif context.user_data.get("last_added_product_id"):
+            product_id = context.user_data.get("last_added_product_id")
+
+        if not product_id:
+            await update.message.reply_text(
+                "❓ Not sure which product this photo is for.\n"
+                "Try: \"add photo for iPhone 11\" or use the 🖼 Add Photo button from inventory."
+            )
+            return
+
+        await update.message.reply_text("⏳ Uploading photo to Supabase...")
+
+        try:
+            photo = update.message.photo[-1]
+            tg_file = await context.bot.get_file(photo.file_id)
+
+            import httpx
+            async with httpx.AsyncClient() as client:
+                response = await client.get(tg_file.file_path)
+                image_bytes = response.content
+
+            file_name = f"products/{product_id}_{photo.file_unique_id}.jpg"
+            supabase.storage.from_("product-images").upload(
+                path=file_name, file=image_bytes,
+                file_options={"content-type": "image/jpeg", "upsert": "true"}
+            )
+            public_url = supabase.storage.from_("product-images").get_public_url(file_name)
+            supabase.table("books").update({"image_url": public_url}).eq("id", product_id).execute()
+
+            context.user_data.pop("admin_action", None)
+            context.user_data.pop("photo_product_id", None)
+            context.user_data.pop("last_added_product_id", None)
+            context.user_data.pop("pending_addphoto_id", None)
+
+            await update.message.reply_text(
+                f"✅ Photo uploaded for product ID `{product_id}`!\n\n🔗 `{public_url}`",
+                parse_mode="Markdown"
+            )
+            logger.info(f"Photo uploaded for product {product_id}: {public_url}")
+
+        except Exception as e:
+            logger.error(f"Photo upload failed for product {product_id}: {e}")
+            await update.message.reply_text(f"❌ Upload failed: {e}")
         return
 
-    product_id = None
-    if context.user_data.get("admin_action") == "add_photo":
-        product_id = context.user_data.get("photo_product_id")
-    elif context.user_data.get("pending_addphoto_id"):
-        product_id = context.user_data.get("pending_addphoto_id")
-    elif context.user_data.get("last_added_product_id"):
-        product_id = context.user_data.get("last_added_product_id")
-
-    if not product_id:
-        await update.message.reply_text(
-            "❓ Not sure which product this photo is for.\n"
-            "Try: \"add photo for iPhone 11\" or use the 🖼 Add Photo button from inventory."
-        )
-        return
-
-    await update.message.reply_text("⏳ Uploading photo to Supabase...")
-
-    try:
+    # ── CUSTOMER: payment receipt
+    user_session = sessions.get(str(user_id), {})
+    if user_session.get("awaiting_receipt"):
         photo = update.message.photo[-1]
-        tg_file = await context.bot.get_file(photo.file_id)
-
-        import httpx
-        async with httpx.AsyncClient() as client:
-            response = await client.get(tg_file.file_path)
-            image_bytes = response.content
-
-        file_name = f"products/{product_id}_{photo.file_unique_id}.jpg"
-        supabase.storage.from_("product-images").upload(
-            path=file_name,
-            file=image_bytes,
-            file_options={"content-type": "image/jpeg", "upsert": "true"}
+        reply = await handle_receipt_photo(
+            str(user_id), photo.file_id, photo.file_unique_id, bot=context.bot
         )
+        await update.message.reply_text(reply, parse_mode="Markdown")
+        return
 
-        public_url = supabase.storage.from_("product-images").get_public_url(file_name)
-        supabase.table("books").update({"image_url": public_url}).eq("id", product_id).execute()
-
-        context.user_data.pop("admin_action", None)
-        context.user_data.pop("photo_product_id", None)
-        context.user_data.pop("last_added_product_id", None)
-        context.user_data.pop("pending_addphoto_id", None)
-
-        await update.message.reply_text(
-            f"✅ Photo uploaded for product ID `{product_id}`!\n\n🔗 `{public_url}`",
-            parse_mode="Markdown"
-        )
-        logger.info(f"Photo uploaded for product {product_id}: {public_url}")
-
-    except Exception as e:
-        logger.error(f"Photo upload failed for product {product_id}: {e}")
-        await update.message.reply_text(f"❌ Upload failed: {e}")
+    # ── CUSTOMER: unsolicited photo (not awaiting receipt)
+    await update.message.reply_text(
+        "Looking good! 😄 If that's your payment receipt, just send it after placing your order and I'll process it right away."
+    )
 
 
 # ── Natural language messages ─────────────────────────────
@@ -405,17 +413,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Send product photos — once per product per session ────
 async def send_relevant_photos(message, reply_text: str, user_id: str):
-    """Send product photos inline, but only once per product per session."""
     try:
-        # Get or init the photos_sent set for this user's session
         user_session = sessions.get(user_id, {})
         photos_sent = user_session.get("photos_sent", set())
 
-        # Check if customer explicitly asked for a photo — if so, allow resend
-        last_msg = ""
+        # Allow resend if customer explicitly asked
         history = user_session.get("history", [])
-        if history:
-            last_msg = history[-2]["content"].lower() if len(history) >= 2 else ""
+        last_msg = history[-2]["content"].lower() if len(history) >= 2 else ""
         explicit_request = any(w in last_msg for w in [
             "picture", "photo", "image", "pic", "show me", "send me", "see it", "how does it look"
         ])
@@ -427,20 +431,14 @@ async def send_relevant_photos(message, reply_text: str, user_id: str):
             image_url = product.get("image_url")
             if not image_url:
                 continue
-
             product_id = product["id"]
-
-            # Skip if already sent this session, unless customer explicitly asked
             if product_id in photos_sent and not explicit_request:
                 continue
-
-            # Check if this product is mentioned in the reply
             title_lower = product["title"].lower()
             reply_lower = reply_text.lower()
             title_words = [w for w in title_lower.split() if len(w) > 3]
             if not any(w in reply_lower for w in title_words):
                 continue
-
             if product_id in sent_this_turn:
                 continue
 
@@ -450,10 +448,8 @@ async def send_relevant_photos(message, reply_text: str, user_id: str):
 
             try:
                 await message.reply_photo(
-                    photo=image_url,
-                    caption=caption,
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    photo=image_url, caption=caption,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 sent_this_turn.add(product_id)
                 photos_sent.add(product_id)
@@ -464,7 +460,6 @@ async def send_relevant_photos(message, reply_text: str, user_id: str):
             if len(sent_this_turn) >= 3:
                 break
 
-        # Persist updated photos_sent back to session
         if user_id in sessions:
             sessions[user_id]["photos_sent"] = photos_sent
 
