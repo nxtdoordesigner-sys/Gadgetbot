@@ -30,11 +30,16 @@ You are Volt, AI sales assistant for VoltStore — a Nigerian gadget store.
 You have full access to the product catalog provided below.
 
 PERSONALITY:
-- Sound like a knowledgeable friend, not a bot
-- Match customer energy — if they're casual, be casual
-- Use natural Nigerian expressions (e.g. "sharp sharp", "no wahala", "e go be")
+- Sound like a real person, not a bot
+- Be warm, friendly and conversational
+- Occasionally use Nigerian expressions naturally — NOT in every message, only when it fits organically
 - Keep replies short — 2-3 sentences max unless explaining specs
-- Never be robotic or formal
+- Never be robotic or stiff
+
+PIDGIN RULES:
+- Use expressions like "no wahala", "sharp sharp", "e go be" SPARINGLY — maximum once every 4-5 messages
+- Don't force it. If it doesn't flow naturally, just speak normally
+- Overusing pidgin sounds fake. Less is more.
 
 BUDGET-FIRST APPROACH:
 - When a customer asks for a product type (e.g. "I want a phone"), ALWAYS ask their budget first
@@ -53,15 +58,14 @@ NEGOTIATION (for products marked NEGOTIABLE in catalog):
 OUT OF STOCK:
 - If product is out of stock, say so immediately
 - Suggest similar alternatives from catalog based on category and price range
-- Never recommend something way outside their budget unless you explain why
 
 PHOTOS:
 - ONLY mention a product photo ONCE per conversation — the first time you recommend or describe that product
 - After that, NEVER reference or trigger the photo again even if you mention the product again
 - If a customer explicitly asks "can I see a picture?" or "send me photo" — mention the product name clearly so the photo sends
-- Do NOT say "photo is attached" or "here's the photo" on every message — say it only the first time
+- Do NOT say "photo is attached" or "here's the photo" on every message
 
-ORDER FLOW — follow this STRICTLY, one step at a time, no skipping:
+ORDER FLOW — follow this STRICTLY, one step at a time:
 
 STEP 1 — PRODUCT CONFIRMATION:
 When customer shows interest in buying, confirm exactly which product and quantity.
@@ -70,9 +74,9 @@ Do NOT ask for name or address yet.
 STEP 2 — LOCATION CHECK:
 Ask: "Are you in Port Harcourt or another state?"
 - If Port Harcourt: ask if they want DELIVERY or PICKUP
-  - Pickup address: A16 Everyday Plaza, Choba, Port Harcourt
-  - Delivery: collect their full address
-- If another state: tell them we do interstate delivery and ask for their full address
+  - Pickup: A16 Everyday Plaza, Choba, Port Harcourt
+  - Delivery: ask for their full address
+- If another state: confirm we do interstate delivery, ask for their full address
 
 STEP 3 — FULL NAME:
 Ask ONLY for their full name. Nothing else.
@@ -81,24 +85,25 @@ STEP 4 — PHONE NUMBER:
 Ask ONLY for their phone number. Nothing else.
 
 STEP 5 — ORDER SUMMARY:
-Show a clean summary:
-  Product, quantity, agreed price
-  Delivery/Pickup address
-  Name, phone
-Then ask: "Shall I confirm this order?"
+Show a clean summary and ask to confirm.
 
 STEP 6 — AFTER CONFIRMATION:
-Output at END of reply (hidden from customer view):
+Output at END of reply:
 ##ORDER## customer_name | product_id:quantity:agreed_price | delivery_address | phone_number
 
-For pickup orders, use "Pickup — A16 Everyday Plaza, Choba, PH" as the delivery_address.
-Use list_price as agreed_price if no negotiation happened.
+For pickup: use "Pickup — A16 Everyday Plaza, Choba, PH" as delivery_address.
+Use list_price as agreed_price if no negotiation.
+
+SMART INFO EXTRACTION — VERY IMPORTANT:
+- If a customer volunteers info early (e.g. gives their name AND address in one message), USE IT — don't ask again
+- If they say "I'm Tsola and I'm at 12 Church Street, Choba, PH" — you already have name AND address, skip those steps
+- If they say "delivery to Lagos" — you already know their state, skip the location check
+- Never ask for info the customer already provided. Always extract from context.
 
 IMPORTANT:
-- Never ask for name and address in the same message
-- Never skip steps
+- Never ask for name and address in the same message UNLESS the customer already gave both
+- Never skip confirmation step
 - Never ask for payment before confirming the order
-- If customer goes off-topic mid-order, gently bring them back to the current step
 
 PAYMENT (after order confirmed):
 - Bank Transfer: GTBank — VoltStore NG, Acct: 0123456789. Send receipt here.
@@ -106,7 +111,6 @@ PAYMENT (after order confirmed):
 
 SHOP INFO:
 - Pickup address: A16 Everyday Plaza, Choba, Port Harcourt
-- If customer asks for shop location or address, give them the above
 
 Only reference products from the catalog. Never make up products or prices.
 """
@@ -181,15 +185,27 @@ Base answers on business data provided.
 def get_session(user_id: str) -> dict:
     now = datetime.now(timezone.utc)
     if user_id not in sessions:
-        sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now, "photos_sent": set()}
+        sessions[user_id] = {
+            "history": [], "cart": [], "name": "",
+            "last_active": now, "photos_sent": set(),
+            "awaiting_receipt": False, "last_order_id": None
+        }
     else:
         last = sessions[user_id].get("last_active", now)
         if (now - last).total_seconds() > SESSION_TIMEOUT_MINUTES * 60:
-            sessions[user_id] = {"history": [], "cart": [], "name": "", "last_active": now, "photos_sent": set()}
+            sessions[user_id] = {
+                "history": [], "cart": [], "name": "",
+                "last_active": now, "photos_sent": set(),
+                "awaiting_receipt": False, "last_order_id": None
+            }
         else:
             sessions[user_id]["last_active"] = now
             if "photos_sent" not in sessions[user_id]:
                 sessions[user_id]["photos_sent"] = set()
+            if "awaiting_receipt" not in sessions[user_id]:
+                sessions[user_id]["awaiting_receipt"] = False
+            if "last_order_id" not in sessions[user_id]:
+                sessions[user_id]["last_order_id"] = None
     return sessions[user_id]
 
 
@@ -197,7 +213,9 @@ def reset_session(user_id: str):
     sessions[user_id] = {
         "history": [], "cart": [], "name": "",
         "last_active": datetime.now(timezone.utc),
-        "photos_sent": set()
+        "photos_sent": set(),
+        "awaiting_receipt": False,
+        "last_order_id": None
     }
 
 
@@ -321,7 +339,7 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
 
     if any(w in user_message.lower() for w in ["start over", "reset", "cancel everything"]):
         reset_session(user_id)
-        return "No wahala! 😊 We're starting fresh. What can I help you with?"
+        return "Sure! We're starting fresh. What can I help you with?"
 
     if "my order" in user_message.lower() and "status" in user_message.lower():
         return await get_order_status(user_id)
@@ -337,6 +355,71 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
         return await handle_admin_message(user_id, user_message, session, bot, admin_ids)
     else:
         return await handle_customer_message(user_id, user_message, session, bot)
+
+
+async def handle_receipt_photo(user_id: str, file_id: str, file_unique_id: str, bot=None) -> str:
+    """Called from main.py when a customer sends a photo and awaiting_receipt is True."""
+    session = get_session(user_id)
+    order_id = session.get("last_order_id")
+
+    try:
+        # Download from Telegram and upload to Supabase Storage
+        import httpx
+        tg_file = await bot.get_file(file_id)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(tg_file.file_path)
+            image_bytes = response.content
+
+        file_name = f"receipts/{order_id}_{file_unique_id}.jpg"
+        supabase.storage.from_("product-images").upload(
+            path=file_name,
+            file=image_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"}
+        )
+        receipt_url = supabase.storage.from_("product-images").get_public_url(file_name)
+
+        # Save URL to order
+        if order_id:
+            supabase.table("orders").update({"receipt_url": receipt_url}).eq("id", order_id).execute()
+
+        # Forward receipt to all admins
+        admin_ids = get_admin_ids()
+        if bot and order_id:
+            # Fetch order details for context
+            res = supabase.table("orders").select("*").eq("id", order_id).single().execute()
+            order = res.data if res.data else {}
+            customer_name = order.get("customer_name", "Customer")
+            total = order.get("total", 0)
+            items_text = ", ".join([i["title"] for i in order.get("items", [])])
+
+            for admin_id in admin_ids:
+                try:
+                    await bot.send_photo(
+                        chat_id=admin_id,
+                        photo=file_id,
+                        caption=(
+                            f"🧾 *Payment Receipt — Order #{order_id}*\n\n"
+                            f"👤 {customer_name}\n"
+                            f"📦 {items_text}\n"
+                            f"💰 ₦{total:,}\n\n"
+                            f"Verify and confirm the order."
+                        ),
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+
+        # Clear awaiting_receipt flag
+        session["awaiting_receipt"] = False
+
+        return (
+            "Got your receipt! 🙌 We'll verify the payment and confirm your order shortly.\n\n"
+            "You'll get a notification once it's confirmed."
+        )
+
+    except Exception as e:
+        session["awaiting_receipt"] = False
+        return "Got your receipt! We'll verify and confirm your order shortly. 🙌"
 
 
 async def get_order_status(user_id: str) -> str:
@@ -532,13 +615,13 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                         text=(
                             f"📦 Hey {customer_name}! Your order has been delivered!\n\n"
                             f"Items: {items_text}\n\n"
-                            f"Hope you love it! 🔥 How was your experience shopping with VoltStore?\n\n"
+                            f"Hope you love it! 🔥 How was your experience?\n\n"
                             f"Reply with a number:\n"
                             f"⭐ 1 - Poor\n⭐⭐ 2 - Fair\n⭐⭐⭐ 3 - Good\n⭐⭐⭐⭐ 4 - Great\n⭐⭐⭐⭐⭐ 5 - Amazing!"
                         )
                     )
                     if str(tg_id) not in sessions:
-                        sessions[str(tg_id)] = {"history": [], "cart": [], "name": "", "photos_sent": set()}
+                        sessions[str(tg_id)] = {"history": [], "cart": [], "name": "", "photos_sent": set(), "awaiting_receipt": False, "last_order_id": None}
                     sessions[str(tg_id)]["awaiting_rating"] = order_id
                 except Exception:
                     pass
@@ -601,8 +684,8 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
             1: "Sorry to hear that 😔 We'll do better. Thanks for the feedback.",
             2: "Thanks for being honest. We're working on improving 🙏",
             3: "Glad it was decent! We're always improving ⚡",
-            4: "Great to hear! 🔥 Come back anytime!",
-            5: "Yesss! 🎉 You made our day! Tell your people about us!"
+            4: "Great to hear! Come back anytime 🔥",
+            5: "That made our day! 🎉 Tell your people about us!"
         }
         return f"{stars}\n\n{responses[rating]}"
 
@@ -626,19 +709,22 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     except RateLimitError:
         session["history"].pop()
         return (
-            "⚡ We're experiencing very high traffic right now and I need a quick breather!\n\n"
-            "Please try again in a few minutes — I'll be right back. No wahala! 🙏"
+            "We're experiencing very high traffic right now — please try again in a few minutes! 🙏"
         )
     except APIError as e:
         session["history"].pop()
-        return "😔 Something went wrong on my end. Please try again in a moment!"
+        return "Something went wrong on my end. Please try again in a moment!"
 
     reply = response.choices[0].message.content.strip()
     session["history"].append({"role": "assistant", "content": reply})
 
     customer_name, order_items, location, phone, agreed_prices = parse_order_signal(reply)
     if customer_name and order_items and location:
-        await save_order(user_id, customer_name, order_items, bot, location, phone or "N/A", agreed_prices or {})
+        order = await save_order(user_id, customer_name, order_items, bot, location, phone or "N/A", agreed_prices or {})
+        if order:
+            # Set awaiting_receipt so next photo from this customer is treated as payment receipt
+            session["awaiting_receipt"] = True
+            session["last_order_id"] = order["id"]
         return clean_reply(reply, ["ORDER"])
 
     return reply
@@ -718,8 +804,8 @@ async def order_timeout(order_id: int, user_id: str, bot, items: list):
                 await bot.send_message(
                     chat_id=int(user_id),
                     text=(
-                        f"⚠️ Your order #{order_id} has been cancelled because we didn't receive payment within 24 hours.\n\n"
-                        "If you still want to order, just start a new conversation. No wahala! 😊"
+                        f"⚠️ Your order #{order_id} was cancelled because we didn't receive payment within 24 hours.\n\n"
+                        "If you'd still like to order, just start a new conversation!"
                     )
                 )
             except Exception:
@@ -744,7 +830,7 @@ async def notify_order_confirmed(order_id: int, bot):
                     f"Your order has been *confirmed* ✅\n\n"
                     f"Items: {items_text}\n"
                     f"Delivery to: {location}\n\n"
-                    f"We'll be in touch shortly for delivery. Thank you for shopping with VoltStore! ⚡"
+                    f"We'll be in touch shortly. Thank you for shopping with VoltStore! ⚡"
                 ),
                 parse_mode="Markdown"
             )
@@ -762,7 +848,7 @@ async def add_to_cart(user_id: str, product_id: int, quantity: int = 1) -> str:
             item["quantity"] += quantity
             return f"✅ Updated cart: *{product['title']}* x{item['quantity']}"
     session["cart"].append({
-        "book_id": product["id"], "title": product["title"],
+        "book_id": product["id"], "title": product["title"]
         "quantity": quantity, "price": product.get("list_price") or product["price"],
     })
     return f"✅ Added: *{product['title']}* — ₦{product['price']:,}"
@@ -776,3 +862,4 @@ def view_cart(user_id: str) -> str:
     lines = [f"  • {i['title']} x{i['quantity']} — ₦{i['price'] * i['quantity']:,}" for i in cart]
     total = sum(i["price"] * i["quantity"] for i in cart)
     return "🛒 *Your Cart:*\n" + "\n".join(lines) + f"\n\n💰 Total: ₦{total:,}"
+
