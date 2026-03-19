@@ -11,7 +11,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from bot import handle_message, add_to_cart, view_cart, get_admin_ids, sessions, handle_receipt_photo
-from catalog import get_all_books, search_books, format_catalog, get_book_by_id
+from catalog import get_all_books, search_books, get_book_by_id
 from supabase_client import supabase
 
 load_dotenv()
@@ -268,7 +268,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]]
         await query.message.reply_text(
             f"Are you sure you want to delete product ID `{product_id}`?",
-            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     elif data.startswith("confirmdelete_") and is_admin:
@@ -305,7 +306,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not product_id:
             await update.message.reply_text(
                 "❓ Not sure which product this photo is for.\n"
-                "Try: \"add photo for iPhone 11\" or use the 🖼 Add Photo button from inventory."
+                "Try: \"add photo for iPhone 15 Pro Max\" or use the 🖼 Add Photo button from inventory."
             )
             return
 
@@ -351,12 +352,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = await handle_receipt_photo(
             str(user_id), photo.file_id, photo.file_unique_id, bot=context.bot
         )
-        await update.message.reply_text(reply, parse_mode="Markdown")
+        await update.message.reply_text(reply)
         return
 
-    # ── CUSTOMER: unsolicited photo (not awaiting receipt)
+    # ── CUSTOMER: unsolicited photo
     await update.message.reply_text(
-        "Looking good! 😄 If that's your payment receipt, just send it after placing your order and I'll process it right away."
+        "If that's your payment receipt, send it after placing your order and I'll process it right away! 🙌"
     )
 
 
@@ -411,13 +412,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_relevant_photos(update.message, reply, str(user_id))
 
 
-# ── Send product photos — once per product per session ────
+# ── Send product photos — strict matching, once per session ──
 async def send_relevant_photos(message, reply_text: str, user_id: str):
+    """
+    Match products to the bot reply using STRICT title matching.
+    All significant words of the product title must appear in the reply.
+    This prevents 'iPhone 13 Pro' matching when 'iPhone 15 Pro Max' was discussed.
+    """
     try:
         user_session = sessions.get(user_id, {})
         photos_sent = user_session.get("photos_sent", set())
 
-        # Allow resend if customer explicitly asked
+        # Allow resend if customer explicitly asked for a photo
         history = user_session.get("history", [])
         last_msg = history[-2]["content"].lower() if len(history) >= 2 else ""
         explicit_request = any(w in last_msg for w in [
@@ -426,19 +432,33 @@ async def send_relevant_photos(message, reply_text: str, user_id: str):
 
         products = get_all_books()
         sent_this_turn = set()
+        reply_lower = reply_text.lower()
 
         for product in products:
             image_url = product.get("image_url")
             if not image_url:
                 continue
+
             product_id = product["id"]
             if product_id in photos_sent and not explicit_request:
                 continue
-            title_lower = product["title"].lower()
-            reply_lower = reply_text.lower()
-            title_words = [w for w in title_lower.split() if len(w) > 3]
-            if not any(w in reply_lower for w in title_words):
+
+            # STRICT matching: ALL significant words in the title must appear in the reply
+            # "significant" = longer than 2 chars, not common filler words
+            filler = {"the", "and", "for", "with", "from", "this", "that"}
+            title_words = [
+                w for w in product["title"].lower().split()
+                if len(w) > 2 and w not in filler
+            ]
+
+            if not title_words:
                 continue
+
+            # Every word must match — this prevents partial matches like
+            # "13 pro" matching "15 pro max"
+            if not all(w in reply_lower for w in title_words):
+                continue
+
             if product_id in sent_this_turn:
                 continue
 
@@ -453,7 +473,7 @@ async def send_relevant_photos(message, reply_text: str, user_id: str):
                 )
                 sent_this_turn.add(product_id)
                 photos_sent.add(product_id)
-                logger.info(f"Photo sent for product {product_id}")
+                logger.info(f"Photo sent for product {product_id}: {product['title']}")
             except Exception as e:
                 logger.error(f"Failed to send photo for product {product_id}: {e}")
 
@@ -488,3 +508,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
