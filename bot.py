@@ -41,19 +41,25 @@ PIDGIN RULES:
 - Don't force it. If it doesn't flow naturally, just speak normally
 - Overusing pidgin sounds fake. Less is more.
 
-BUDGET-FIRST APPROACH:
-- When a customer asks for a product type (e.g. "I want a phone"), ALWAYS ask their budget first
-- Use budget to filter and recommend from catalog
-- If their budget is below all options, tell them honestly and show closest option
-- If budget fits multiple options, show top 2-3 and let them choose
+PRICING & NEGOTIATION — follow this flow STRICTLY:
 
-NEGOTIATION (for products marked NEGOTIABLE in catalog):
-- You can negotiate price — stay between list_price and base_price (floor)
-- If customer asks for discount: make them feel special, offer 5-10k off first
-- If they push: meet somewhere fair in the middle
-- If they go below base_price: hold firm warmly ("I wan help you but e no go work below this price o")
-- Never tell customer what the base_price is
-- For NON-NEGOTIABLE products: politely say price is fixed, offer alternatives if they complain
+STEP A — ALWAYS lead with list_price first.
+When recommending or quoting a product, always state the list_price. Never open with a discount.
+
+STEP B — If customer says the price is too high, asks for a discount, or pushes back:
+Ask: "What's your budget?" — then compare their budget to base_price (the floor, never reveal this to customer).
+- If budget >= base_price: you can negotiate. Make them feel special, offer a small discount first.
+  - Start by offering 5-10% off list_price
+  - If they push more: meet somewhere between their budget and list_price
+  - Never go below base_price. Hold firm: "I wan help you but e no fit go below this price o"
+- If budget < base_price: you cannot sell at that price. Say so honestly and warmly, then:
+  - Recommend cheaper alternatives from the catalog that fit their budget
+  - Show top 2-3 options within or close to their budget
+
+STEP C — For NON-NEGOTIABLE products (not marked NEGOTIABLE):
+Price is fixed. If customer complains, apologise briefly and suggest alternatives.
+
+NEVER reveal base_price to the customer under any circumstance.
 
 OUT OF STOCK:
 - If product is out of stock, say so immediately
@@ -236,7 +242,7 @@ def build_catalog_context() -> str:
     lines = []
     for p in products:
         negotiable_info = (
-            f" | NEGOTIABLE (floor: N{p['base_price']:,})"
+            f" | NEGOTIABLE (base_price: {p['base_price']:,})"
             if p.get("negotiable") and p.get("base_price")
             else ""
         )
@@ -244,7 +250,7 @@ def build_catalog_context() -> str:
         condition = p.get("condition", "Brand New")
         specs = p.get("specs", "")
         lines.append(
-            f"ID:{p['id']} | {p['title']} | {p['author']} | N{p['price']:,} | "
+            f"ID:{p['id']} | {p['title']} | {p['author']} | list_price:{p['price']:,} | "
             f"{p.get('category', '')} | {condition} | Stock:{stock}{negotiable_info}"
             + (f" | {specs}" if specs else "")
         )
@@ -278,7 +284,7 @@ def build_admin_data_context() -> str:
 
     recent = all_orders[:5]
     recent_lines = [
-        f"  #{o['id']} | {o['customer_name']} | {o.get('location', 'N/A')} | N{o['total']:,} | {o['status']}"
+        f"  #{o['id']} | {o['customer_name']} | {o.get('location', 'N/A')} | {o['total']:,} | {o['status']}"
         for o in recent
     ]
 
@@ -286,7 +292,7 @@ def build_admin_data_context() -> str:
         f"\nBUSINESS DATA ({now.strftime('%Y-%m-%d %H:%M')} UTC):\n"
         f"Orders today: {len(today_orders)} | This month: {len(month_orders)} | "
         f"Pending: {len(pending)} | Confirmed: {len(confirmed)}\n"
-        f"Revenue today: N{today_revenue:,} | This month: N{month_revenue:,} | All time: N{total_revenue:,}\n"
+        f"Revenue today: {today_revenue:,} | This month: {month_revenue:,} | All time: {total_revenue:,}\n"
         f"In stock: {len([p for p in all_products if p['in_stock']])} | "
         f"Out of stock: {len([p for p in all_products if not p['in_stock']])}\n"
         f"Low stock (<=2): {', '.join([p['title'] for p in low_stock]) or 'none'}\n"
@@ -410,7 +416,7 @@ async def handle_receipt_photo(user_id: str, file_id: str, file_unique_id: str, 
                             f"*Payment Receipt — Order #{order_id}*\n\n"
                             f"Customer: {customer_name}\n"
                             f"Items: {items_text}\n"
-                            f"Total: N{total:,}\n\n"
+                            f"Total: {total:,}\n\n"
                             f"Verify and confirm the order."
                         ),
                         parse_mode="Markdown",
@@ -452,7 +458,7 @@ async def get_order_status(user_id: str) -> str:
     return (
         f"*Your latest order (#{order['id']}):*\n\n"
         f"Items: {items_text}\n"
-        f"Total: N{order['total']:,}\n"
+        f"Total: {order['total']:,}\n"
         f"Status: {status}\n"
         f"Delivery: {order.get('location', 'N/A')}"
     )
@@ -481,7 +487,7 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
                 condition = p.get("condition", "Brand New")
                 lines.append(
                     f"*{p['title']}* (ID: {p['id']})\n"
-                    f"  N{p['price']:,}{neg}\n"
+                    f"  {p['price']:,}{neg}\n"
                     f"  Stock: {stock} | {condition}"
                 )
             return "\n\n".join(lines)
@@ -829,7 +835,7 @@ async def save_order(
 
     if order and bot:
         items_text = "\n".join([
-            f"  - {i['title']} x{i['quantity']} — N{i['price']:,}"
+            f"  - {i['title']} x{i['quantity']} — {i['price']:,}"
             for i in enriched_items
         ])
         negotiated = " (negotiated)" if agreed_prices else ""
@@ -841,7 +847,7 @@ async def save_order(
             f"TG ID: {user_id}\n"
             f"Address: {location}\n\n"
             f"{items_text}\n\n"
-            f"Total: N{total:,}{negotiated}\n\n"
+            f"Total: {total:,}{negotiated}\n\n"
             f"Confirm: /confirm {order['id']}\n"
             f"Mark delivered: tell me 'order #{order['id']} delivered to {customer_name}'"
         )
@@ -922,7 +928,7 @@ async def add_to_cart(user_id: str, product_id: int, quantity: int = 1) -> str:
         "quantity": quantity,
         "price": product.get("list_price") or product["price"],
     })
-    return f"Added: {product['title']} — N{product['price']:,}"
+    return f"Added: {product['title']} — {product['price']:,}"
 
 
 def view_cart(user_id: str) -> str:
@@ -931,9 +937,9 @@ def view_cart(user_id: str) -> str:
     if not cart:
         return "Your cart is empty."
     lines = [
-        f"  - {i['title']} x{i['quantity']} — N{i['price'] * i['quantity']:,}"
+        f"  - {i['title']} x{i['quantity']} — {i['price'] * i['quantity']:,}"
         for i in cart
     ]
     total = sum(i["price"] * i["quantity"] for i in cart)
-    return "Your Cart:\n" + "\n".join(lines) + f"\n\nTotal: N{total:,}"
+    return "Your Cart:\n" + "\n".join(lines) + f"\n\nTotal: {total:,}"
 
