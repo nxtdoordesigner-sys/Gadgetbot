@@ -567,13 +567,14 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
     customer_name, order_items, location, phone, agreed_prices = parse_order_signal(reply)
     if customer_name and order_items and location:
         logger.info(f"Order signal parsed: {customer_name} | {order_items} | {location}")
-        await save_order(user_id, customer_name, order_items, bot, location, phone or "N/A", agreed_prices or {})
+        order = await save_order(user_id, customer_name, order_items, bot, location, phone or "N/A", agreed_prices or {})
+        if order:
+            session["awaiting_receipt"] = True
+            session["last_order_id"] = order["id"]
+            logger.info(f"Order #{order['id']} saved. Awaiting receipt from {user_id}")
     else:
         if "##ORDER##" in reply:
             logger.warning(f"##ORDER## signal found but failed to parse. Raw reply tail: {reply[-400:]}")
-
-    # Store which products were mentioned so main.py can send the right photos
-    session["last_reply"] = reply
 
     return clean_reply(reply)
 
@@ -609,28 +610,33 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
     if order:
         supabase.table("orders").update({"phone_number": phone}).eq("id", order["id"]).execute()
 
-    if order and bot:
+    if order:
         items_text = "\n".join([f"  • {i['title']} x{i['quantity']} — ₦{i['price']:,}" for i in enriched_items])
         negotiated = " *(negotiated)*" if agreed_prices else ""
         admin_ids = get_admin_ids()
+        logger.info(f"Order #{order['id']} created. Notifying admins: {admin_ids}. Bot available: {bot is not None}")
 
         admin_msg = (
-            f"🛎 *New Order #{order['id']}!*\n\n"
+            f"🛎 *New Order \#{order['id']}!*\n\n"
             f"👤 *{customer_name}*\n"
             f"📞 {phone}\n"
-            f"📱 TG ID: `{user_id}` (t.me/user?id={user_id})\n"
+            f"📱 TG: `{user_id}`\n"
             f"📍 *{location}*\n\n"
             f"{items_text}\n\n"
             f"💰 Total: ₦{total:,}{negotiated}\n\n"
-            f"✅ Confirm: `/confirm {order['id']}`\n"
-            f"🚚 Mark delivered: just tell me \"order #{order['id']} delivered to {customer_name}\""
+            f"✅ Confirm: /confirm {order['id']}\n"
+            f"🚚 Delivered? Just tell me in chat"
         )
-        for admin_id in admin_ids:
-            try:
-                await bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode="Markdown")
-                logger.info(f"Admin notification sent to {admin_id} for order #{order['id']}")
-            except Exception as e:
-                logger.error(f"Failed to notify admin {admin_id}: {e}")
+
+        if bot:
+            for admin_id in admin_ids:
+                try:
+                    await bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode="Markdown")
+                    logger.info(f"Admin notification sent to {admin_id} for order #{order['id']}")
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id}: {e}")
+        else:
+            logger.error(f"bot is None in save_order — admin notification not sent for order #{order['id']}")
 
         asyncio.create_task(order_timeout(order["id"], user_id, bot, enriched_items))
 
