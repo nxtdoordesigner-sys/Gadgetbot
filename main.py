@@ -65,7 +65,7 @@ async def catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_catalog(message, products):
-    for product in products[:10]:  # Cap at 10 to avoid spam
+    for product in products[:10]:
         keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
         caption = (
             f"*{product['title']}*\n"
@@ -99,7 +99,6 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         await update.message.reply_text("Usage: /search <product name>")
         return
-    from catalog import search_books
     products = search_books(query)
     if not products:
         await update.message.reply_text(f"😔 No results for *{query}*.", parse_mode="Markdown")
@@ -128,7 +127,7 @@ async def orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── /admin ────────────────────────────────────────────────
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         await update.message.reply_text("⛔ Access denied.")
         return
     keyboard = [
@@ -152,7 +151,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     is_admin = user_id in get_admin_ids()
 
-    # ── Customer callbacks
     if data == "browse_catalog":
         products = get_all_books()
         await query.message.reply_text("📱 Here's our catalog:")
@@ -185,7 +183,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
-    # ── Admin callbacks
     elif data == "admin_orders" and is_admin:
         res = supabase.table("orders").select("*").eq("status", "pending").order("created_at", desc=True).execute()
         pending = res.data or []
@@ -306,8 +303,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if context.user_data.get("admin_action") == "add_photo":
         product_id = context.user_data.get("photo_product_id")
-        photo = update.message.photo[-1]  # Highest resolution
-        image_url = photo.file_id  # Store Telegram file_id
+        photo = update.message.photo[-1]
+        image_url = photo.file_id
 
         supabase.table("books").update({"image_url": image_url}).eq("id", product_id).execute()
         context.user_data.pop("admin_action", None)
@@ -320,7 +317,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # Handle pending photo attachment
     if user_id in get_admin_ids() and context.user_data.get("pending_photo"):
         from catalog import search_books
         results = search_books(user_message)
@@ -343,7 +339,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
 
-    # Extract ##LASTADDED## marker if present
+    # Extract ##LASTADDED## marker if present (admin only)
     last_added_id = None
     if "##LASTADDED##" in reply:
         try:
@@ -353,55 +349,56 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # Send reply text
     await update.message.reply_text(reply, parse_mode="Markdown")
 
-    # Proactively send product photos if bot mentioned specific products
+    # Send product photo only for customers, only when bot recommends a specific product
     if user_id not in get_admin_ids():
-        await send_relevant_photos(update.message, reply, bot=context.bot)
+        await send_relevant_photos(update.message, reply)
 
 
-# ── Send product photos based on bot reply ───────────────
-async def send_relevant_photos(message, reply_text: str, bot=None):
-    """Scan bot reply for product names and send their photos if available."""
+# ── Send product photo only when bot explicitly names a product ───────────
+async def send_relevant_photos(message, reply_text: str):
+    """
+    Only send a photo if the bot's reply contains an exact product title match.
+    Uses full title matching to avoid false positives from generic words.
+    Sends at most 1 photo per reply.
+    """
     try:
         products = get_all_books()
-        sent = set()
+        reply_lower = reply_text.lower()
+
+        best_match = None
+        best_match_len = 0
+
         for product in products:
-            title_lower = product["title"].lower()
-            reply_lower = reply_text.lower()
             image_url = product.get("image_url")
             if not image_url:
                 continue
-            # Match any significant word of product title in reply
-            title_words = [w for w in title_lower.split() if len(w) > 3]
-            if not any(w in reply_lower for w in title_words):
-                continue
-            if product["id"] in sent:
-                continue
 
-            keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{product['id']}")]]
-            title = product["title"]
-            price = product["price"]
-            neg = " | 💬 Negotiable" if product.get("negotiable") else ""
-            caption = f"*{title}*\n💰 ₦{price:,}{neg}"
+            title_lower = product["title"].lower()
 
-            # Try sending as file_id first, then as URL
+            # Only match if the full product title appears in the reply
+            if title_lower in reply_lower:
+                # Prefer the longest (most specific) match to avoid false positives
+                if len(title_lower) > best_match_len:
+                    best_match = product
+                    best_match_len = len(title_lower)
+
+        if best_match:
+            keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{best_match['id']}")]]
+            neg = " | 💬 Negotiable" if best_match.get("negotiable") else ""
+            caption = f"*{best_match['title']}*\n💰 ₦{best_match['price']:,}{neg}"
             try:
                 await message.reply_photo(
-                    photo=image_url,
+                    photo=best_match["image_url"],
                     caption=caption,
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
-                sent.add(product["id"])
-                logger.info(f"Photo sent for product {product['id']}: {image_url[:30]}")
+                logger.info(f"Photo sent for product {best_match['id']}: {best_match['title']}")
             except Exception as e:
-                logger.error(f"Failed to send photo for product {product['id']}: {e}")
-                # Photo failed — skip silently, don't break conversation
+                logger.error(f"Failed to send photo for product {best_match['id']}: {e}")
 
-            if len(sent) >= 3:
-                break
     except Exception as e:
         logger.error(f"send_relevant_photos error: {e}")
 
