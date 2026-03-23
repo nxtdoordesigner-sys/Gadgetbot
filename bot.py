@@ -40,28 +40,29 @@ PERSONALITY:
 - Never be robotic or overly formal
 
 BUDGET-FIRST APPROACH:
-- When a customer asks for a product type (e.g. "I want a phone"), ALWAYS ask their budget first
-- Use budget to filter and recommend from catalog
-- If their budget is below all options, tell them honestly and show closest option
-- If budget fits multiple options, show top 2-3 and let them choose
+- When a customer mentions a budget, pick the SINGLE best product at or just under that budget
+- Recommend ONE product confidently. Do not list multiple options upfront
+- Only offer alternatives if the customer says they don't like your recommendation, or asks to see other options
+- Never mention negotiation unless the customer asks to reduce the price
 
 NEGOTIATION (for products marked NEGOTIABLE in catalog):
+- ONLY bring up negotiation if the customer asks "can you do better?", "can you reduce?", "any discount?" or similar
 - You can negotiate price — stay between list_price and base_price (floor)
-- If customer asks for discount: make them feel special, offer ₦5-10k off first
+- If customer asks for discount: offer ₦5-10k off first
 - If they push: meet somewhere fair in the middle
 - If they go below base_price: hold firm warmly ("I'd love to help but I can't go below this price")
 - Never tell customer what the base_price is
-- For NON-NEGOTIABLE products: politely say price is fixed, offer alternatives if they complain
+- For NON-NEGOTIABLE products: politely say price is fixed if they ask
 
 OUT OF STOCK:
 - If product is out of stock, say so immediately
-- Suggest similar alternatives from catalog based on category and price range
+- Suggest ONE similar alternative based on category and price range
 - Never recommend something way outside their budget unless you explain why
 
 ORDER FLOW — follow strictly:
 STEP 1: Confirm which product and quantity
 STEP 2: Ask ONLY for full name
-STEP 3: Ask ONLY for phone number  
+STEP 3: Ask ONLY for phone number
 STEP 4: Ask ONLY for delivery address
 STEP 5: Show order summary with agreed price, ask to confirm
 STEP 6: After confirmation output at END of reply:
@@ -77,8 +78,9 @@ Only reference products from the catalog. Never make up products or prices.
 CRITICAL: The catalog below is always the source of truth for prices, stock and availability.
 If a price or detail in the conversation history conflicts with the catalog, ALWAYS use the catalog.
 
-PHOTOS: When you mention or recommend a product, photos are automatically sent if available.
-If customer asks "can I see a picture?" or "send me a photo" — tell them the photo is being sent and mention the product name clearly so it triggers automatically.
+PHOTOS:
+- Do NOT tell the customer a photo is being sent or reference photos at all
+- Photos are sent automatically in the background — just recommend the product naturally
 """
 
 
@@ -243,7 +245,6 @@ def parse_order_signal(reply: str):
         agreed_prices = {}
         for item_str in parts[1].strip().split(","):
             item_parts = item_str.strip().split(":")
-            # Strip "ID:" prefix if LLM includes it
             raw_id = item_parts[0].replace("ID:", "").replace("id:", "").strip()
             product_id = int(raw_id)
             quantity = int(item_parts[1])
@@ -264,16 +265,13 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
     session = get_session(user_id)
     is_admin = int(user_id) in admin_ids
 
-    # Handle reset
     if any(w in user_message.lower() for w in ["start over", "reset", "cancel everything"]):
         reset_session(user_id)
         return "Sure! We're starting fresh. What can I help you with?"
 
-    # Handle order status
     if "my order" in user_message.lower() and "status" in user_message.lower():
         return await get_order_status(user_id)
 
-    # Handle paystack request
     if "pay with card" in user_message.lower():
         return (
             "To pay with card, use this Paystack link:\n"
@@ -290,7 +288,7 @@ async def handle_message(user_id: str, user_message: str, bot=None) -> str:
 async def get_order_status(user_id: str) -> str:
     res = supabase.table("orders").select("*").eq("telegram_id", str(user_id)).order("created_at", desc=True).limit(1).execute()
     if not res.data:
-        return "I don't see any orders from you yet. Want to browse what we have? 😊"
+        return "I don't see any orders from you yet. Want to browse what we have?"
     order = res.data[0]
     status_map = {
         "pending": "⏳ Pending payment confirmation",
@@ -318,7 +316,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     admin_session = sessions[admin_key]
     admin_session["history"].append({"role": "user", "content": user_message})
 
-    # ── Direct catalog lookup — bypass LLM for speed ────
     msg_lower = user_message.lower()
 
     if msg_lower.startswith("show me ") or msg_lower.startswith("show "):
@@ -341,14 +338,12 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             return "\n\n".join(lines)
         return f"No products found matching '{query}'."
 
-    # ── Photo intercept — never let LLM handle this ─────
-    photo_triggers = ["i have the picture", "i have the photo", "i have pictures", 
+    photo_triggers = ["i have the picture", "i have the photo", "i have pictures",
                       "sending the picture", "sending the photo", "ready to send",
                       "i have it", "here's the pic", "here is the pic"]
     if any(t in msg_lower for t in photo_triggers):
         return "Go ahead, send it! 📸"
 
-    # ── Report triggers ──────────────────────────────────
     report_map = {
         "orders report": "orders",
         "inventory sheet": "inventory",
@@ -390,7 +385,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     reply = response.choices[0].message.content.strip()
     admin_session["history"].append({"role": "assistant", "content": reply})
 
-    # ##ADDPRODUCT##
     add_data = parse_signal(reply, "ADDPRODUCT")
     if add_data:
         try:
@@ -416,7 +410,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply) + f"\n\n❌ Error: {e}"
 
-    # ##UPDATEPRODUCT##
     update_data = parse_signal(reply, "UPDATEPRODUCT")
     if update_data:
         try:
@@ -446,7 +439,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply) + f"\n\n❌ Error: {e}"
 
-    # ##REMOVEPRODUCT##
     remove_data = parse_signal(reply, "REMOVEPRODUCT")
     if remove_data:
         try:
@@ -455,7 +447,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply) + f"\n\n❌ Error: {e}"
 
-    # ##DELIVERED##
     delivered_data = parse_signal(reply, "DELIVERED")
     if delivered_data and bot:
         try:
@@ -497,7 +488,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply) + f"\n\n❌ Error: {e}"
 
-    # ##BROADCAST##
     broadcast_data = parse_signal(reply, "BROADCAST")
     if broadcast_data and bot:
         try:
@@ -532,7 +522,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
         except Exception as e:
             return clean_reply(reply) + f"\n\n❌ Error: {e}"
 
-    # ##ADDADMIN##
     addadmin_data = parse_signal(reply, "ADDADMIN")
     if addadmin_data:
         try:
@@ -547,7 +536,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
 
 
 async def handle_customer_message(user_id: str, user_message: str, session: dict, bot=None) -> str:
-    # Handle rating response
     awaiting_rating = session.get("awaiting_rating")
     if awaiting_rating and user_message.strip() in ["1", "2", "3", "4", "5"]:
         rating = int(user_message.strip())
@@ -584,7 +572,9 @@ async def handle_customer_message(user_id: str, user_message: str, session: dict
         if "##ORDER##" in reply:
             logger.warning(f"##ORDER## signal found but failed to parse. Raw reply tail: {reply[-400:]}")
 
-    # Always clean signals from what the customer sees
+    # Store which products were mentioned so main.py can send the right photos
+    session["last_reply"] = reply
+
     return clean_reply(reply)
 
 
@@ -648,7 +638,6 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
 
 
 async def order_timeout(order_id: int, user_id: str, bot, items: list):
-    """Auto-cancel unpaid orders after 24 hours and restock items."""
     await asyncio.sleep(24 * 60 * 60)
     try:
         res = supabase.table("orders").select("status").eq("id", order_id).single().execute()
@@ -676,7 +665,6 @@ async def order_timeout(order_id: int, user_id: str, bot, items: list):
 
 
 async def notify_order_confirmed(order_id: int, bot):
-    """Call this when admin confirms an order."""
     try:
         res = supabase.table("orders").select("*").eq("id", order_id).single().execute()
         if res.data:
