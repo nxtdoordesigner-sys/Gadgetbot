@@ -491,15 +491,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send product photo for customers when bot recommends a specific product
     if user_id not in get_admin_ids():
-        await send_relevant_photos(update.message, reply)
+        asked_for_photo = any(w in user_message.lower() for w in ["photo", "picture", "pic", "image", "show me", "see it", "look like"])
+        await send_relevant_photos(update.message, reply, asked_for_photo)
 
 
 # ── Send product photo when bot recommends a product ─────
-async def send_relevant_photos(message, reply_text: str):
+async def send_relevant_photos(message, reply_text: str, asked_for_photo: bool = False):
     """
-    Send a photo if the bot's reply mentions an exact product title.
-    If the product has no photo, send a brief "photo coming soon" note with an order button.
-    Sends at most 1 match per reply.
+    - If product has a photo: send it silently whenever the product is mentioned.
+    - If product has NO photo and customer asked for one: send a brief "coming shortly" card.
+    - If product has NO photo and customer didn't ask: do nothing.
     """
     try:
         products = get_all_books()
@@ -521,8 +522,8 @@ async def send_relevant_photos(message, reply_text: str):
         keyboard = [[InlineKeyboardButton("🛒 Order This", callback_data=f"order_{best_match['id']}")]]
         neg = " | 💬 Negotiable" if best_match.get("negotiable") else ""
         caption = f"*{best_match['title']}*\n💰 ₦{best_match['price']:,}{neg}"
-
         image_url = best_match.get("image_url")
+
         if image_url:
             try:
                 await message.reply_photo(
@@ -534,21 +535,15 @@ async def send_relevant_photos(message, reply_text: str):
                 logger.info(f"Photo sent for product {best_match['id']}: {best_match['title']}")
             except Exception as e:
                 logger.error(f"Failed to send photo for product {best_match['id']}: {e}")
-                # Fall back to text card
                 await message.reply_text(caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            # No photo available — send text card with note
-            no_photo_caption = (
-                f"{caption}\n\n"
-                f"📸 _Photo will be sent shortly._\n"
-                f"Want to go ahead with the order, or do you have any questions?"
-            )
+        elif asked_for_photo:
+            # Only mention the missing photo if the customer actually asked for one
             await message.reply_text(
-                no_photo_caption,
+                f"{caption}\n\n📸 _Photo will be sent shortly._\nWant to go ahead with the order, or do you have any questions?",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            logger.info(f"No photo for product {best_match['id']} — sent no-photo card")
+        # else: no photo, customer didn't ask — say nothing
 
     except Exception as e:
         logger.error(f"send_relevant_photos error: {e}")
