@@ -10,7 +10,6 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from bot import handle_message, add_to_cart, view_cart, get_admin_ids
 from catalog import get_all_books, search_books, format_catalog, get_book_by_id
 from supabase_client import supabase
 
