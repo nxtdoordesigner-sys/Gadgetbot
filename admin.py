@@ -248,6 +248,23 @@ async def cancel_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Order #{order_id} not found.")
 
 
+# ── /swap — print swap intake checklist ──────────────────
+@admin_only
+async def swap_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📲 *Phone Swap Checklist*\n\n"
+        "Send this to the customer or use it as your intake guide:\n\n"
+        "1️⃣ *Video* — Record a short clip showing the *front and back* of the phone clearly\n"
+        "2️⃣ *Specs* — Storage size (e.g. 128GB) and current *battery health %*\n"
+        "3️⃣ *Condition* — Any changed, replaced, or faulty parts? Especially check the *speakers*\n"
+        "4️⃣ *Receipt* — Do you still have the original receipt?\n"
+        "5️⃣ *Timing* — Are you swapping this week or next week?\n\n"
+        "Once they send all that, review the phone and send them pictures/videos of what you have in stock. "
+        "Then ask: *What's your name, and are you coming in today or tomorrow?*",
+        parse_mode="Markdown"
+    )
+
+
 # ── Register all admin handlers ───────────────────────────
 def register_admin_handlers(app):
     app.add_handler(CommandHandler("admin", admin_menu))
@@ -258,4 +275,5 @@ def register_admin_handlers(app):
     app.add_handler(CommandHandler("products", admin_list_products))
     app.add_handler(CommandHandler("pending", pending_orders))
     app.add_handler(CommandHandler("confirm", confirm_order))
+    app.add_handler(CommandHandler("swap", swap_checklist))
     app.add_handler(CommandHandler("cancelorder", cancel_order))
