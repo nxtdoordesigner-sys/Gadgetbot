@@ -11,6 +11,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from bot import handle_message, add_to_cart, view_cart, get_admin_ids
+from admin import register_admin_handlers
 from catalog import get_all_books, search_books, format_catalog, get_book_by_id
 from supabase_client import supabase
 
@@ -414,6 +415,7 @@ def main():
     app.add_handler(CommandHandler("cart", cart))
     app.add_handler(CommandHandler("orders", orders))
     app.add_handler(CommandHandler("admin", admin_cmd))
+    register_admin_handlers(app)
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
