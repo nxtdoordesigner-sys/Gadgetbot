@@ -25,14 +25,26 @@ SESSION_TIMEOUT_MINUTES = 30
 _catalog_cache = {"data": None, "updated_at": None}
 CATALOG_CACHE_TTL_SECONDS = 60  # refresh every 60s
 
+# ── Admin IDs cache — avoid hitting Supabase on every message ──
+_admin_ids_cache: list[int] = []
+_admin_ids_updated_at: datetime | None = None
+ADMIN_IDS_CACHE_TTL_SECONDS = 60
+
 
 def get_admin_ids() -> list:
+    global _admin_ids_cache, _admin_ids_updated_at
+    now = datetime.now(timezone.utc)
+    if _admin_ids_updated_at and (now - _admin_ids_updated_at).total_seconds() < ADMIN_IDS_CACHE_TTL_SECONDS:
+        return _admin_ids_cache
     try:
         res = supabase.table("admins").select("telegram_id").execute()
-        return [int(a["telegram_id"]) for a in (res.data or [])]
+        _admin_ids_cache = [int(a["telegram_id"]) for a in (res.data or [])]
+        _admin_ids_updated_at = now
+        return _admin_ids_cache
     except Exception as e:
         logger.error(f"get_admin_ids failed: {e}", exc_info=True)
-        return [5851987998]
+        fallback = int(os.getenv("FALLBACK_ADMIN_ID", "0"))
+        return [fallback] if fallback else _admin_ids_cache or []
 
 
 CUSTOMER_PROMPT = """
@@ -247,9 +259,11 @@ def build_catalog_context() -> str:
         return _catalog_cache["data"]
 
     try:
-        products = get_all_books()
+        # Fetch ALL products (including out of stock) so bot can say "out of stock, here's an alternative"
+        response = supabase.table("books").select("*").order("id").execute()
+        products = response.data or []
     except Exception as e:
-        logger.error(f"build_catalog_context: get_all_books failed: {e}", exc_info=True)
+        logger.error(f"build_catalog_context: fetch failed: {e}", exc_info=True)
         return _catalog_cache["data"] or "No products currently in stock."
 
     if not products:
@@ -260,12 +274,14 @@ def build_catalog_context() -> str:
         name = p.get("title", "Unknown")
         brand = p.get("author", "")
         negotiable_info = f" | NEGOTIABLE (floor: ₦{p['base_price']:,})" if p.get("negotiable") and p.get("base_price") else ""
-        stock = p.get("stock_qty", 1)
+        stock = p.get("stock_qty", 0)
+        in_stock = p.get("in_stock", False)
+        stock_label = f"Stock:{stock}" if in_stock else "OUT OF STOCK"
         condition = p.get("condition", "Brand New")
         specs = p.get("specs", "")
         lines.append(
             f"ID:{p['id']} | {name} | {brand} | ₦{p['price']:,} | "
-            f"{p.get('category', '')} | {condition} | Stock:{stock}{negotiable_info}"
+            f"{p.get('category', '')} | {condition} | {stock_label}{negotiable_info}"
             + (f" | {specs}" if specs else "")
         )
 
@@ -469,7 +485,6 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     if admin_key not in sessions:
         sessions[admin_key] = {"history": []}
     admin_session = sessions[admin_key]
-    admin_session["history"].append({"role": "user", "content": user_message})
 
     msg_lower = user_message.lower()
 
@@ -538,12 +553,15 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     messages = [
         {"role": "system", "content": system_content},
         *admin_session["history"][-8:],
+        {"role": "user", "content": user_message},
     ]
 
     reply = await _call_groq(messages, temperature=0.4, max_tokens=800)
     if reply is None:
         return "⚠️ I'm having trouble connecting right now. Please try again in a moment."
 
+    # Only persist to history after a successful reply — prevents corruption on Groq failure
+    admin_session["history"].append({"role": "user", "content": user_message})
     admin_session["history"].append({"role": "assistant", "content": reply})
 
     # ── Parse structured JSON action ──
@@ -730,6 +748,9 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             name = str(action_data.get("name", "Admin")).strip()
             assert tid.isdigit(), "telegram_id must be a number"
             supabase.table("admins").insert({"telegram_id": tid, "name": name}).execute()
+            # Invalidate admin IDs cache
+            global _admin_ids_updated_at
+            _admin_ids_updated_at = None
             return clean_reply(reply) + f"\n\n✅ {name} added as admin!"
         except (AssertionError, KeyError) as e:
             logger.error(f"ADDADMIN failed: {e} | data: {action_data}", exc_info=True)
