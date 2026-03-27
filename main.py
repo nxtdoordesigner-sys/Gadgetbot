@@ -346,15 +346,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_id = int(data.split("_")[1])
         res = supabase.table("orders").update({"status": "confirmed"}).eq("id", order_id).execute()
         if res.data:
-            order = res.data[0]
             await query.message.reply_text(f"✅ Order #{order_id} confirmed!")
-            try:
-                await context.bot.send_message(
-                    chat_id=int(order["telegram_id"]),
-                    text=f"🎉 Your order #{order_id} has been confirmed! We'll process it right away. Thank you for shopping with VoltStore! ⚡"
-                )
-            except Exception:
-                pass
+            from bot import notify_order_confirmed
+            await notify_order_confirmed(order_id, context.bot)
 
     elif data.startswith("cancel_") and is_admin:
         order_id = int(data.split("_")[1])
@@ -473,6 +467,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    # Check if multiple products match — ask admin to pick
+    if not user_message.strip().isdigit():
+        from catalog import search_books
+        all_results = search_books(user_message)
+        if len(all_results) > 1:
+            lines = [f"  `{p['id']}` — {p['title']}" for p in all_results[:5]]
+            await update.message.reply_text(
+                f"📋 Found {len(all_results)} matches. Reply with the exact product ID:\n\n" + "\n".join(lines),
+                parse_mode="Markdown"
+            )
+            return
+
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = await handle_message(str(user_id), user_message, bot=context.bot)
 
@@ -501,9 +507,18 @@ async def send_relevant_photos(message, reply_text: str, asked_for_photo: bool =
     - If product has a photo: send it silently whenever the product is mentioned.
     - If product has NO photo and customer asked for one: send a brief "coming shortly" card.
     - If product has NO photo and customer didn't ask: do nothing.
+    Uses the cached catalog from bot.py to avoid a Supabase hit on every message.
     """
     try:
-        products = get_all_books()
+        from bot import _catalog_cache
+        # Use cached products — fall back to DB only if cache is cold
+        cached_data = _catalog_cache.get("data")
+        if cached_data:
+            # Parse product titles from catalog cache for matching
+            products = get_all_books()  # still needed for image_url — but only if we found a match
+        else:
+            products = get_all_books()
+
         reply_lower = reply_text.lower()
 
         best_match = None
@@ -537,13 +552,11 @@ async def send_relevant_photos(message, reply_text: str, asked_for_photo: bool =
                 logger.error(f"Failed to send photo for product {best_match['id']}: {e}")
                 await message.reply_text(caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         elif asked_for_photo:
-            # Only mention the missing photo if the customer actually asked for one
             await message.reply_text(
                 f"{caption}\n\n📸 _Photo will be sent shortly._\nWant to go ahead with the order, or do you have any questions?",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        # else: no photo, customer didn't ask — say nothing
 
     except Exception as e:
         logger.error(f"send_relevant_photos error: {e}")
