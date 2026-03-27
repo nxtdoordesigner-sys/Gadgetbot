@@ -677,7 +677,7 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
         logger.info(f"Order #{order['id']} created. Notifying admins: {admin_ids}. Bot available: {bot is not None}")
 
         admin_msg = (
-            f"🛎 *New Order \#{order['id']}!*\n\n"
+            f"🛎 *New Order #{order['id']}!*\n\n"
             f"👤 *{customer_name}*\n"
             f"📞 {phone}\n"
             f"📱 TG: `{user_id}`\n"
