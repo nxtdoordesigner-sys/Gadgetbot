@@ -1,5 +1,5 @@
 from supabase_client import supabase
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def create_order(customer_name: str, telegram_id: str, items: list, total: float, location: str = "Not provided"):
@@ -13,7 +13,7 @@ def create_order(customer_name: str, telegram_id: str, items: list, total: float
         "total": total,
         "status": "pending",
         "location": location,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     response = supabase.table("orders").insert(order).execute()
     return response.data[0] if response.data else None
