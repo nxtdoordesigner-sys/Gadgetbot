@@ -229,7 +229,7 @@ def build_revenue_sheet(wb: Workbook):
     total_cell.number_format = '#,##0'
     total_cell.font = Font(bold=True, color=ACCENT, name="Arial", size=11)
 
-    # Category breakdown
+    # Category breakdown — join with products table to get category
     cat_row = total_row + 3
     ws.cell(row=cat_row, column=1, value="Revenue by Category").font = Font(bold=True, size=12, name="Arial")
 
@@ -238,11 +238,19 @@ def build_revenue_sheet(wb: Workbook):
         cell = ws.cell(row=cat_row + 1, column=col, value=h)
         style_header(cell, bg=DARK)
 
+    # Build a book_id -> category lookup to fix missing category on order items
+    try:
+        products_res = supabase.table("books").select("id, category").execute()
+        book_category_map = {p["id"]: p.get("category", "Other") for p in (products_res.data or [])}
+    except Exception:
+        book_category_map = {}
+
     cat_revenue = {}
     cat_units = {}
     for o in orders:
         for item in o.get("items", []):
-            cat = item.get("category", "Other")
+            # Try item category first, fall back to lookup map
+            cat = item.get("category") or book_category_map.get(item.get("book_id"), "Other")
             cat_revenue[cat] = cat_revenue.get(cat, 0) + item["price"] * item["quantity"]
             cat_units[cat] = cat_units.get(cat, 0) + item["quantity"]
 
