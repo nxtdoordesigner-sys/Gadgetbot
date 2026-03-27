@@ -1,4 +1,5 @@
 import os
+import functools
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 from supabase_client import supabase
@@ -13,6 +14,7 @@ def is_admin(user_id: int) -> bool:
 
 def admin_only(func):
     """Decorator to restrict commands to admins only."""
+    @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(update.effective_user.id):
             await update.message.reply_text("⛔ You don't have permission to use this command.")
