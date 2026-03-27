@@ -41,42 +41,24 @@ PERSONALITY:
 - Never be robotic or overly formal
 
 BUDGET-FIRST APPROACH:
-- When a customer mentions a budget, pick the SINGLE best product AT or just UNDER that budget from the catalog
-- NEVER recommend a product above the customer's stated budget
+- When a customer mentions a budget, pick the SINGLE best product at or just under that budget
 - Recommend ONE product confidently. Do not list multiple options upfront
-- Only offer alternatives if the customer says they don't like your recommendation or asks for other options
-- A budget mention is NOT an invitation to negotiate -- never bring up negotiation proactively
+- Only offer alternatives if the customer says they don't like your recommendation, or asks to see other options
+- Never mention negotiation unless the customer asks to reduce the price
 
-PRICE RULES -- CRITICAL, NEVER BREAK THESE:
-- ALWAYS use the EXACT price from the catalog. NEVER invent, estimate, or approximate a price
-- Once a customer has selected a specific product, quote ONLY that product's exact catalog price
-- Do NOT switch to recommending a different product just because the customer mentioned a budget -- they already chose
-- Do NOT restart the order flow or ask for budget again once a customer has picked a product
-- Stay on the chosen product until the customer explicitly says they want something different
-
-NEGOTIATION:
-- ONLY enter negotiation if the customer explicitly asks to reduce the price: "fit less?", "can you reduce?", "any discount?", "what's the best you can do?", "I can offer X" -- or similar direct price-reduction language
-- When they ask to negotiate, FIRST check the catalog: is this product marked NEGOTIABLE?
-  -> If NOT negotiable: "The price on this one is fixed, I can't go lower -- but it's worth every naira!"
-  -> If NEGOTIABLE: negotiate between list_price (opening price) and base_price (absolute floor, never go below)
-- Negotiation steps: offer N5,000-10,000 off first -> if they push, meet in the middle -> hold firm if they go below base_price
-- If customer names a price they can offer: accept if it's at or above base_price, decline warmly if below
-- NEVER reveal the base_price amount to the customer
+NEGOTIATION (for products marked NEGOTIABLE in catalog):
+- ONLY bring up negotiation if the customer asks "can you do better?", "can you reduce?", "any discount?" or similar
+- You can negotiate price — stay between list_price and base_price (floor)
+- If customer asks for discount: offer ₦5-10k off first
+- If they push: meet somewhere fair in the middle
+- If they go below base_price: hold firm warmly ("I'd love to help but I can't go below this price")
+- Never tell customer what the base_price is
+- For NON-NEGOTIABLE products: politely say price is fixed if they ask
 
 OUT OF STOCK:
 - If product is out of stock, say so immediately
 - Suggest ONE similar alternative based on category and price range
 - Never recommend something way outside their budget unless you explain why
-
-PHONE SWAP / TRADE-IN:
-- If a customer mentions swapping, trading in, or exchanging their phone, confirm we do swaps and walk them through what's needed — warmly, not as a rigid list.
-- Collect all of the following (ask in 1-2 at a time naturally):
-  • A short video showing the front AND back of the phone (so we can assess condition)
-  • Storage size and battery health percentage
-  • Any changed, replaced, or faulty parts — especially the speakers
-  • Whether they have the original receipt
-  • When they're planning to swap — this week or next week?
-- Once they've shared the details, let them know the team will review and get back to them with a swap value, and ask when they're thinking of coming in (today or tomorrow?).
 
 ORDER FLOW — follow strictly:
 STEP 1: Confirm which product and quantity
@@ -93,14 +75,13 @@ PAYMENT (after order placed):
 - Bank Transfer: GTBank — VoltStore NG, Acct: 0123456789. Send receipt here.
 - For card payment: type "pay with card"
 
-PHOTOS:
-- Do NOT mention photos at all unless the customer explicitly asks for one
-- If the customer asks for a photo and it's not available yet, say: "I'll get that photo sent to you shortly. In the meantime, do you want to go ahead with the order or do you have any other questions?"
-- Photos are sent automatically in the background for products that have them — just recommend the product naturally without referencing photos
-
 Only reference products from the catalog. Never make up products or prices.
 CRITICAL: The catalog below is always the source of truth for prices, stock and availability.
 If a price or detail in the conversation history conflicts with the catalog, ALWAYS use the catalog.
+
+PHOTOS:
+- Do NOT tell the customer a photo is being sent or reference photos at all
+- Photos are sent automatically in the background — just recommend the product naturally
 """
 
 
@@ -232,16 +213,16 @@ def build_catalog_context() -> str:
         return "No products currently in stock."
     lines = []
     for p in products:
+        # Support both book-style (title/author) and gadget-style (title/author used as name/brand)
         name = p.get("title", "Unknown")
         brand = p.get("author", "")
         negotiable_info = f" | NEGOTIABLE (floor: ₦{p['base_price']:,})" if p.get("negotiable") and p.get("base_price") else ""
         stock = p.get("stock_qty", 1)
         condition = p.get("condition", "Brand New")
         specs = p.get("specs", "")
-        has_photo = "📸" if p.get("image_url") else "🚫photo"
         lines.append(
             f"ID:{p['id']} | {name} | {brand} | ₦{p['price']:,} | "
-            f"{p.get('category', '')} | {condition} | Stock:{stock} | {has_photo}{negotiable_info}"
+            f"{p.get('category', '')} | {condition} | Stock:{stock}{negotiable_info}"
             + (f" | {specs}" if specs else "")
         )
     return "CURRENT CATALOG:\n" + "\n".join(lines)
@@ -319,10 +300,15 @@ def parse_order_signal(reply: str):
         agreed_prices = {}
         for item_str in parts[1].strip().split(","):
             item_parts = item_str.strip().split(":")
-            raw_id = item_parts[0].replace("ID:", "").replace("id:", "").strip()
-            product_id = int(raw_id)
-            quantity = int(item_parts[1])
-            agreed_price = float(item_parts[2]) if len(item_parts) > 2 else None
+            # Handle both "2:1:price" and "ID:2:1:price" formats
+            numeric_parts = []
+            for p in item_parts:
+                clean = p.strip().upper().replace("ID", "").strip()
+                if clean:
+                    numeric_parts.append(clean)
+            product_id = int(numeric_parts[0])
+            quantity = int(numeric_parts[1]) if len(numeric_parts) > 1 else 1
+            agreed_price = float(numeric_parts[2]) if len(numeric_parts) > 2 else None
             items.append({"book_id": product_id, "quantity": quantity})
             if agreed_price:
                 agreed_prices[product_id] = agreed_price
@@ -388,32 +374,60 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
     if admin_key not in sessions:
         sessions[admin_key] = {"history": []}
     admin_session = sessions[admin_key]
-
     admin_session["history"].append({"role": "user", "content": user_message})
 
-    # Report triggers
-    report_keywords = {
+    msg_lower = user_message.lower()
+
+    if msg_lower.startswith("show me ") or msg_lower.startswith("show "):
+        query = msg_lower.replace("show me ", "").replace("show ", "").strip()
+        from catalog import search_books
+        results = search_books(query)
+        if results:
+            lines = []
+            for p in results[:5]:
+                neg = " | 💬 Negotiable" if p.get("negotiable") else ""
+                stock = p.get("stock_qty", 0)
+                pid = p["id"]
+                price = p["price"]
+                condition = p.get("condition", "Brand New")
+                lines.append(
+                    f"*{p['title']}* (ID: {pid})\n"
+                    f"  💰 ₦{price:,}{neg}\n"
+                    f"  📦 Stock: {stock} | 🔧 {condition}"
+                )
+            return "\n\n".join(lines)
+        return f"No products found matching '{query}'."
+
+    photo_triggers = ["i have the picture", "i have the photo", "i have pictures",
+                      "sending the picture", "sending the photo", "ready to send",
+                      "i have it", "here's the pic", "here is the pic"]
+    if any(t in msg_lower for t in photo_triggers):
+        return "Go ahead, send it! 📸"
+
+    report_map = {
         "orders report": "orders",
         "inventory sheet": "inventory",
         "revenue report": "revenue",
         "customer list": "customers",
-        "low stock report": "low_stock",
+        "low stock": "lowstock",
         "full report": "full",
+        "send me the report": "full",
+        "send report": "full",
     }
-    msg_lower = user_message.lower()
-    for keyword, rtype in report_keywords.items():
-        if keyword in msg_lower and bot:
-            try:
-                report_bytes = generate_report(rtype)
-                await bot.send_document(
-                    chat_id=int(user_id),
-                    document=report_bytes,
-                    filename=f"VoltStore_{rtype.capitalize()}_Report.xlsx",
-                    caption=f"📊 Here's your {rtype} report! Generated just now."
-                )
-                return f"📊 {rtype.capitalize()} report sent!"
-            except Exception as e:
-                return f"❌ Error generating report: {e}"
+    for trigger, rtype in report_map.items():
+        if trigger in msg_lower:
+            if bot:
+                try:
+                    fpath = generate_report(rtype)
+                    await bot.send_document(
+                        chat_id=int(user_id),
+                        document=open(fpath, "rb"),
+                        filename=f"VoltStore_{rtype.capitalize()}_Report.xlsx",
+                        caption=f"📊 Here's your {rtype} report! Generated just now."
+                    )
+                    return f"📊 {rtype.capitalize()} report sent!"
+                except Exception as e:
+                    return f"❌ Error generating report: {e}"
 
     system_content = (
         f"{ADMIN_PROMPT}\n\n"
@@ -450,7 +464,7 @@ async def handle_admin_message(user_id: str, user_message: str, session: dict, b
             }).execute()
             if res.data:
                 new_id = res.data[0]['id']
-                suffix = f"\n\n✅ *{name}* added to inventory! (ID: `{new_id}`)\n\n📸 Send a photo now and I'll attach it automatically."
+                suffix = f"\n\n✅ *{name}* added!\n\nSend me the product photos and I'll attach them automatically 📸"
                 return clean_reply(reply) + suffix + f"##LASTADDED##{new_id}"
             return clean_reply(reply) + "\n\n❌ Failed to add."
         except Exception as e:
@@ -696,6 +710,7 @@ async def save_order(user_id: str, customer_name: str, items: list, bot=None,
             }).execute()
         except Exception as e:
             logger.warning(f"Could not save order timeout to DB: {e}")
+            # Fallback: in-memory task (will be lost on restart but better than nothing)
             asyncio.create_task(order_timeout(order["id"], user_id, bot, enriched_items))
 
     return order
